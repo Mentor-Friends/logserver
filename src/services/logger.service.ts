@@ -13,7 +13,8 @@ export class LogService {
   )
 
   // Root directories for logs
-  private static readonly baseLogDir = path.join(__dirname, 'logs')
+  //private static readonly baseLogDir = path.join(__dirname, 'logs')
+  private static readonly baseLogDir = process.env.LOGPATH;
   private static readonly mftsccsLogDir = path.join(
     LogService.baseLogDir,
     'mftsccs',
@@ -72,7 +73,7 @@ export class LogService {
     // Determine the correct file name and path
     const fileName = `${logType}log_user_${userId}.log`
     const filePath = path.join(userLogDir, fileName)
-
+    console.log("this is the file", filePath);
     if (!logEntry) {
       return
     }
