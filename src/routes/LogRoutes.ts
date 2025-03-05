@@ -6,7 +6,7 @@ import verifyRequestToken from '../middlewares/verifyRequestToken';
 const router = express.Router();
 
 // Define routes
-router.post('/logger',verifyRequestToken, addLogs)
+router.post('/logger', verifyRequestToken, addLogs)
 router.get('/package-logs', getPackageLogs);
 router.get('/application-logs', getApplicationLogs);
 router.get('/schema-query', )

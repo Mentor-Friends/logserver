@@ -80,7 +80,7 @@ export async function addLogs(req:any, res:any): Promise<void>{
       res.status(413).json({ message: 'Payload too large' })
       return
     }
-
+    // console.log(userId, logData);
     LogService.addLog(userId, logType, logData)
     res.status(200).json({ message: 'Log entry added successfully' })
   } catch (error) {
