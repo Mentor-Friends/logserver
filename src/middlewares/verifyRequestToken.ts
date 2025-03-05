@@ -7,6 +7,7 @@ import * as jwt from 'jsonwebtoken'
 const verifyRequestToken = (req: any, res: any, next: any) => {
   try {
     const authToken = req.header('authorization')
+    console.log("this is the auth token", authToken);
     const token: string = authToken?.trim()?.split(' ')?.pop()
     const parts = token?.split('.')
 
