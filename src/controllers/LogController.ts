@@ -3,6 +3,7 @@ import { Response } from 'express';
 import path from 'path';
 import fs from 'fs';
 import { LogService } from '../services/logger.service';
+import * as jwt from 'jsonwebtoken';
 
 function parseLogFile(filePath) {
   try {
@@ -62,11 +63,14 @@ export const getApplicationLogs = (req: any, res: any) => {
 export async function addLogs(req:any, res:any): Promise<void>{
   try {
     // Check if user is authenticated
-     const userId = req.user?.userId ?? 998;
-    // if (!userId) {
-    //   res.status(400).json({ message: 'User not authenticated' })
-    //   return
-    // }
+    const authToken = req.header('authorization')
+    const token:string | undefined = authToken?.trim()?.split(' ')?.pop()
+    let userId = 998
+
+    if(token){
+      userId = await decodedTokenForUserId(token) ?? 998;
+      //  const userId = req.user?.userId ?? 998;
+    }
 
     // Check for logType and logData
     const { logType, logData } = req.body
@@ -87,4 +91,27 @@ export async function addLogs(req:any, res:any): Promise<void>{
     console.error(`Error adding log: ${error}`)
     res.status(500).json({ message: 'Internal Server Error' })
   }
+}
+
+
+// Helper Function to decode the token and extract the userId
+function decodedTokenForUserId(token:string) {
+
+  try {
+    if(!token) return null;
+    const parts = token.split('.');
+    if(parts.length !==3) {
+      return null;
+    }
+    const decodedToken = jwt.verify(token, process.env.JWT_SECRET);
+    if(decodedToken){
+      return Number(decodedToken?.unique_name);
+    } else {
+      return null;
+    }
+  } catch (error) {
+    // console.error("Token validation failed : ", error);
+    return null
+  }
+
 }
