@@ -41,6 +41,7 @@ export class LogService {
   // Add a log entry for the specified user
   public static addLog(userId: number, logType: string, logEntry: []): void {
     try {
+      console.log(`Adding log of ${userId}.`)
       // Add logs to the appropriate user-specific log folder
       if (logType === this.mftsccs) {
         this.saveLogToFile(userId, this.mftsccs, logEntry);
