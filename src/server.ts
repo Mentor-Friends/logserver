@@ -8,7 +8,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 init(process.env.MFTSCCS_BASE_URL, process.env.MFTSCCS_AI_URL)
 app.use(express.json({ limit: '50mb' }));
-app.use(bodyParser.json());
+// app.use(bodyParser.json());
 app.use(cors({
   origin : '*',
   methods: ["GET","POST", "PUT", "DELETE"],
