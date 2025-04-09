@@ -7,6 +7,7 @@ import * as jwt from 'jsonwebtoken';
 
 function parseLogFile(filePath) {
   try {
+    if(fs.existsSync(filePath)) {
       const data = fs.readFileSync(filePath, 'utf8');
       
       // Example: Convert each line into a JSON object
@@ -16,6 +17,10 @@ function parseLogFile(filePath) {
       }));
 
       return logs;
+    } else {
+      console.warn('Log file not found at : ', filePath)
+      return [];
+    }
   } catch (err) {
       console.error('Error reading log file:', err);
       return [];
@@ -25,7 +30,7 @@ function parseLogFile(filePath) {
 
 export const getPackageLogs = (req: any, res: any) => {
     try{
-        const userId = req.query.userId;
+        const userId = req.query.userId || 998;
         let logLocationFolder = process.env.LOGPATH;
         let logType = 'mftsccs';
         let userFolder = 'user_' + userId;
@@ -43,7 +48,7 @@ export const getPackageLogs = (req: any, res: any) => {
 
 export const getApplicationLogs = (req: any, res: any) => {
     try{
-        const userId = req.query.userId;
+        const userId = req.query.userId || 998;
         let logLocationFolder = process.env.LOGPATH;
         let logType = 'application';
         let userFolder = 'user_' + userId;
