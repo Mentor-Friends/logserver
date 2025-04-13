@@ -76,7 +76,7 @@ export async function addLogs(req:any, res:any): Promise<void>{
       userId = await decodedTokenForUserId(token) ?? 998;
       //  const userId = req.user?.userId ?? 998;
     }
-    console.log(`Log of : ${userId}`);
+    // console.log(`Log of : ${userId}`);
     
     // Check for logType and logData
     const { logType, logData } = req.body
