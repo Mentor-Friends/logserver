@@ -1,6 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import zlib from 'zlib'
+import { AnomalyService } from './anomaly/anomaly.service'
 
 export class LogService {
   private static mftsccs: string = 'mftsccs'
@@ -40,9 +41,12 @@ export class LogService {
   // Add a log entry for the specified user
   public static addLog(userId: number, logType: string, logEntry: []): void {
     try {
+      // console.log(`Adding log of ${userId}.`)
       // Add logs to the appropriate user-specific log folder
       if (logType === this.mftsccs) {
-        this.saveLogToFile(userId, this.mftsccs, logEntry)
+        this.saveLogToFile(userId, this.mftsccs, logEntry);
+        // Send logs for anomaly detection
+        AnomalyService.addLogToAnomaly(userId, this.mftsccs, logEntry);
       } else if (logType === this.app) {
         this.saveLogToFile(userId, this.app, logEntry)
       }
@@ -73,7 +77,7 @@ export class LogService {
     // Determine the correct file name and path
     const fileName = `${logType}log_user_${userId}.log`
     const filePath = path.join(userLogDir, fileName)
-    console.log("this is the file", filePath);
+    // console.log("this is the file", filePath);
     if (!logEntry) {
       return
     }
@@ -122,7 +126,11 @@ export class LogService {
         fs.writeFileSync(zipFileName, gzippedContent)
   
         // Clear the original file
-        fs.writeFileSync(filePath, JSON.stringify([]))
+        fs.truncate(filePath, 0, (err) => {
+          if(err){
+            console.error(`Error truncating file : ${err}`);
+          }
+        });
       }
     }
     catch(ex){
