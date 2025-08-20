@@ -94,6 +94,25 @@ class LogAnalysisService {
     }
   }
 
+    /**
+   * Get all route logs for a specific user
+   */
+  static getUserRouteLogs(userId: number, logType: string = 'application'): LogEntry[] {
+    try {
+      const logPath = process.env.LOGPATH || '';
+      const userFolder = `user_${userId}`;
+      const fileName = logType === 'application' 
+        ? `app_route_user_${userId}.log`
+        : `mftsccs_route_user_${userId}.log`;
+      
+      const logFilePath = path.join(logPath, logType, userFolder, fileName);
+      return this.parseLogFile(logFilePath);
+    } catch (err) {
+      console.error(`Error getting logs for user ${userId}: ${err}`);
+      return [];
+    }
+  }
+
   /**
    * Extract route change logs and calculate time spent on each route
    */
