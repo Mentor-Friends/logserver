@@ -2,14 +2,17 @@
 import express from 'express';
 import { addLogs, getApplicationLogs, getPackageLogs } from '../controllers/LogController';
 import { healthCheck } from '../controllers/HealthCheckController';
+import { getUserRouteActivity } from '../controllers/LogQueryController';
 
 const router = express.Router();
 
-// Define routes
-router.post('/logger', addLogs)
-router.get('/check', healthCheck)
+// Basic log routes
+router.post('/logger', addLogs);
+router.get('/check', healthCheck);
 router.get('/package-logs', getPackageLogs);
 router.get('/application-logs', getApplicationLogs);
-router.get('/schema-query', )
+
+// Analytics route - only keeping the activity endpoint as requested
+router.get('/analytics/activity', getUserRouteActivity);
 
 export default router;

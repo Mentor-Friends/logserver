@@ -50,6 +50,7 @@ export class LogService {
       } else if (logType === this.app) {
         this.saveLogToFile(userId, this.app, logEntry)
       }
+      this.saveRouteLog(userId, logEntry);
     } catch (error) {
       console.error(`Error adding ${logType} log for user ${userId}:`, error)
     }
@@ -162,4 +163,29 @@ export class LogService {
       return []
     }
   }
+
+  
+  // Save only ROUTE logs to a separate file (independent)
+  public static saveRouteLog(userId: number, logs: any[]): void {
+    if (!logs || logs.length === 0) return;
+
+    // Ensure app log directory exists
+    const userLogDir = path.join(this.appLogDir, `user_${userId}`);
+    if (!fs.existsSync(userLogDir)) fs.mkdirSync(userLogDir, { recursive: true });
+    const routeLogs = logs.filter(log => log.level === "ROUTE");
+    if (routeLogs.length === 0) return;
+    const routeFileName = `app_route_user_${userId}.log`;
+    const routeFilePath = path.join(userLogDir, routeFileName);
+
+    const routeLogsStr = routeLogs.map(log => JSON.stringify(log)).join("\n") + "\n";
+
+    try {
+      fs.appendFileSync(routeFilePath, routeLogsStr);
+      this.checkFileSizeAndZip(routeFilePath);
+    } catch (error) {
+      console.error(`Error writing ROUTE logs for user ${userId}:`, error);
+    }
+  }
 }
+
+
