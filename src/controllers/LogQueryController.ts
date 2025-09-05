@@ -58,40 +58,13 @@ export const getUserRouteActivity = (req: Request, res: Response) => {
           : 0;
 
         return {
+          activity: log.message || "Unknown",
           route: log.data?.url,
-          date: tsUtc.toLocaleDateString("en-US", {
-            weekday: "short",
-            month: "short",
-            day: "numeric",
-            year: "numeric",
-          }),
-          time: tsUtc.toLocaleTimeString("en-US", {
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-          }),
-          formattedTimestamp: tsUtc.toLocaleString("en-US", {
-            dateStyle: "medium",
-            timeStyle: "medium",
-          }),
           timeSpent: durationMs ? formatDuration(durationMs) : "Unknown",
           timeSpentMs: durationMs,
           exactTimestamp: log.timestamp, // original UTC ISO string
-          localTimestamp: new Date(tsUtc.getTime() - tsUtc.getTimezoneOffset() * 60000).toISOString().slice(0, -1), // ISO in local time
           sessionId: log.data?.sessionId,
           requestFrom: log.data?.requestFrom || "Unknown",
-          // Add local date and time fields
-          localDate: tsUtc.toLocaleDateString(undefined, {
-            weekday: "short",
-            month: "short",
-            day: "numeric",
-            year: "numeric",
-          }),
-          localTime: tsUtc.toLocaleTimeString(undefined, {
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-          }),
         };
       });
 
