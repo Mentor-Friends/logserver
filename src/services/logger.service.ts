@@ -9,7 +9,7 @@ export class LogService {
 
   // Max file size for log files (default 10MB)
   private static readonly MAX_FILE_SIZE: number = parseInt(
-    process.env.LOG_MAX_FILE_SIZE || '10485760',
+    process.env.LOG_MAX_FILE_SIZE || '10485760', 
     10,
   )
 
@@ -177,10 +177,14 @@ export class LogService {
     const routeFileName = `app_route_user_${userId}.log`;
     const routeFilePath = path.join(userLogDir, routeFileName);
 
+    // Check and zip BEFORE writing if file is already too large
+    this.checkFileSizeAndZip(routeFilePath);
+
     const routeLogsStr = routeLogs.map(log => JSON.stringify(log)).join("\n") + "\n";
 
     try {
       fs.appendFileSync(routeFilePath, routeLogsStr);
+      // Optionally, check again after writing in case a huge batch was added
       this.checkFileSizeAndZip(routeFilePath);
     } catch (error) {
       console.error(`Error writing ROUTE logs for user ${userId}:`, error);
