@@ -28,6 +28,9 @@ function getAllUserIds(): number[] {
 }
 
 // New API: Route analytics table
+// This endpoint aggregates per-route analytics across all users.
+// It reads log files for each user, computes views, active users, engagement time, and event counts per route.
+// Supports filtering by time, domain, and route, and paginates results for table display.
 export const getRouteAnalyticsTable = (req: any, res: any) => {
   try {
     // Support POST (body) and GET (query) for filters
@@ -35,8 +38,8 @@ export const getRouteAnalyticsTable = (req: any, res: any) => {
     const { start, end, page, pageSize, domain, route } = source;
     const startTime = start ? new Date(start).getTime() : null;
     const endTime = end ? new Date(end).getTime() : null;
-  const pageNum = page ? Math.max(1, parseInt(page, 10)) : 1;
-  const pageSizeNum = pageSize ? parseInt(pageSize, 10) : undefined;
+    const pageNum = page ? Math.max(1, parseInt(page, 10)) : 1;
+    const pageSizeNum = pageSize ? parseInt(pageSize, 10) : undefined;
     const domainFilter = domain ? String(domain) : undefined;
     const routeFilter = route ? String(route) : undefined;
 
@@ -65,9 +68,11 @@ export const getRouteAnalyticsTable = (req: any, res: any) => {
       } else if (fs.existsSync(logFile + ".gz")) {
         lines = readGzippedLogFile(logFile + ".gz");
       }
-      const logs = lines.map(line => {
-        try { return JSON.parse(line); } catch { return null; }
-      }).filter(Boolean);
+      const logs = lines
+        .map(line => {
+          try { return JSON.parse(line); } catch { return null; }
+        })
+        .filter(log => log && log.level === "ROUTE");
 
       // Time filter
       const filteredLogs = logs.filter((log: any) => {
@@ -130,22 +135,64 @@ export const getRouteAnalyticsTable = (req: any, res: any) => {
       });
     });
 
+    // Calculate session metrics per route
+    const routeSessionMap: Record<string, Set<number>> = {};
+    
+    userIds.forEach((userId) => {
+      const logPath = process.env.LOGPATH || "";
+      const userFolder = `user_${userId}`;
+      const logFile = path.join(logPath, "application", userFolder, `app_route_user_${userId}.log`);
+      let lines: string[] = [];
+      if (fs.existsSync(logFile)) {
+        lines = fs.readFileSync(logFile, "utf8").split("\n").filter(l => l.trim());
+      } else if (fs.existsSync(logFile + ".gz")) {
+        lines = readGzippedLogFile(logFile + ".gz");
+      }
+      const logs = lines
+        .map(line => {
+          try { return JSON.parse(line); } catch { return null; }
+        })
+        .filter(Boolean);
+
+      // Time filter
+      const filteredLogs = logs.filter((log: any) => {
+        const t = new Date(log.timestamp).getTime();
+        if (startTime && t < startTime) return false;
+        if (endTime && t > endTime) return false;
+        return true;
+      });
+
+      // Track which sessions visited each route
+      filteredLogs.forEach((log: any) => {
+        const route = log.data?.url || "Unknown";
+        const sessionId = log.data?.sessionId || 0;
+        if (!routeSessionMap[route]) {
+          routeSessionMap[route] = new Set();
+        }
+        routeSessionMap[route].add(sessionId);
+      });
+    });
+
     // Format for table
     let table = Object.entries(routeMap)
       .map(([route, data]) => {
         const activeUsers = data.users.size;
-        const viewsPerActiveUser =
-          activeUsers > 0 ? data.views / activeUsers : 0;
-        const avgEngagement =
-          data.views > 0 ? data.totalTime / data.views : 0;
+        const activeSessions = routeSessionMap[route]?.size || 0;
+        const viewsPerActiveUser = activeUsers > 0 ? data.views / activeUsers : 0;
+        const viewsPerSession = activeSessions > 0 ? data.views / activeSessions : 0;
+        const avgEngagement = data.users.size > 0 ? data.totalTime / data.users.size : 0;
+        const avgEngagementPerSession = activeSessions > 0 ? data.totalTime / activeSessions : 0;
+        
         return {
           route,
+          totalTime: formatDuration(data.totalTime),
           views: data.views,
           activeUsers,
+          activeSessions,
           viewsPerActiveUser: Number(viewsPerActiveUser.toFixed(2)),
-          avgEngagementTime: avgEngagement
-            ? formatDuration(avgEngagement)
-            : "0s",
+          viewsPerSession: Number(viewsPerSession.toFixed(2)),
+          avgEngagementTime: avgEngagement ? formatDuration(avgEngagement) : "0s",
+          avgEngagementTimePerSession: avgEngagementPerSession ? formatDuration(avgEngagementPerSession) : "0s",
           eventCount: data.eventCount,
         };
       })
@@ -186,10 +233,75 @@ export const getRouteAnalyticsTable = (req: any, res: any) => {
         data.users.forEach(userId => uniqueUserIds.add(userId));
       }
     });
+    // Calculate session statistics
+    const sessionStats = new Map<number, { userId: number; routes: Set<string>; totalViews: number; totalTime: number }>();
+    
+    userIds.forEach((userId) => {
+      // Re-read logs for session analysis
+      const logPath = process.env.LOGPATH || "";
+      const userFolder = `user_${userId}`;
+      const logFile = path.join(logPath, "application", userFolder, `app_route_user_${userId}.log`);
+      let lines: string[] = [];
+      if (fs.existsSync(logFile)) {
+        lines = fs.readFileSync(logFile, "utf8").split("\n").filter(l => l.trim());
+      } else if (fs.existsSync(logFile + ".gz")) {
+        lines = readGzippedLogFile(logFile + ".gz");
+      }
+      const logs = lines
+        .map(line => {
+          try { return JSON.parse(line); } catch { return null; }
+        })
+        .filter(log => log && log.level === "ROUTE");
+
+      // Time filter
+      const filteredLogs = logs.filter((log: any) => {
+        const t = new Date(log.timestamp).getTime();
+        if (startTime && t < startTime) return false;
+        if (endTime && t > endTime) return false;
+        return true;
+      });
+
+      // Group by sessionId
+      const sessionGroups = filteredLogs.reduce((acc: any, log: any) => {
+        const sessionId = log.data?.sessionId || 0;
+        if (!acc[sessionId]) acc[sessionId] = [];
+        acc[sessionId].push(log);
+        return acc;
+      }, {});
+
+      Object.entries(sessionGroups).forEach(([sessionId, sessionLogs]: [string, any[]]) => {
+        const sid = parseInt(sessionId);
+        sessionLogs.sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+        
+        if (!sessionStats.has(sid)) {
+          sessionStats.set(sid, { userId, routes: new Set(), totalViews: 0, totalTime: 0 });
+        }
+        
+        const sessionData = sessionStats.get(sid)!;
+        sessionData.totalViews += sessionLogs.length;
+        
+        sessionLogs.forEach((log: any, idx: number) => {
+          const route = log.data?.url || "Unknown";
+          sessionData.routes.add(route);
+          
+          // Calculate time spent in this route
+          const next = sessionLogs[idx + 1];
+          if (next) {
+            const duration = new Date(next.timestamp).getTime() - new Date(log.timestamp).getTime();
+            if (duration > 0 && duration < 1000 * 60 * 60) {
+              sessionData.totalTime += duration;
+            }
+          }
+        });
+      });
+    });
+
+
     const summary = {
       totalViews: table.reduce((sum, row) => sum + row.views, 0),
       totalActiveUsers: uniqueUserIds.size,
       totalEventCount: table.reduce((sum, row) => sum + row.eventCount, 0),
+      activeSessions: sessionStats.size,
     };
     if (pageNum || pageSizeNum) {
       const startIdx = (pageNum - 1) * (pageSizeNum || table.length);

@@ -4,16 +4,21 @@ import LogAnalysisService from "../services/analysis/log-analysis.service";
 
 // Format duration into human-readable text
 const formatDuration = (ms: number): string => {
-  if (ms < 1000) return `${ms}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
-  if (ms < 3600000) {
-    const m = Math.floor(ms / 60000);
-    const s = Math.floor((ms % 60000) / 1000);
-    return `${m}m ${s}s`;
+  try {
+    if (ms < 1000) return `${ms}ms`;
+    if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+    if (ms < 3600000) {
+      const m = Math.floor(ms / 60000);
+      const s = Math.floor((ms % 60000) / 1000);
+      return `${m}m ${s}s`;
+    }
+    const h = Math.floor(ms / 3600000);
+    const m = Math.floor((ms % 3600000) / 60000);
+    return `${h}h ${m}m`;
+  } catch (err) {
+    console.error("Error formatting duration:", err);
+    return "Unknown";
   }
-  const h = Math.floor(ms / 3600000);
-  const m = Math.floor((ms % 3600000) / 60000);
-  return `${h}h ${m}m`;
 };
 
 export const getUserRouteActivity = (req: Request, res: Response) => {
@@ -29,10 +34,11 @@ export const getUserRouteActivity = (req: Request, res: Response) => {
 
     const limit = req.query.limit ? parseInt(req.query.limit as string) : 0;
 
-    // Fetch & filter logs
+    // Fetch & filter logs - include both ROUTE and USER_EVENT levels for route changes
     const logs = LogAnalysisService.getUserRouteLogs(userId).filter(
       (log) =>
         log.data?.url &&
+        (log.level === 'ROUTE' || log.level === 'USER_EVENT') &&
         (!sessionId || log.data?.sessionId === sessionId)
     );
 
@@ -51,6 +57,7 @@ export const getUserRouteActivity = (req: Request, res: Response) => {
 
       const activities = groupLogs.map((log, idx) => {
         const tsUtc = new Date(log.timestamp); // base UTC timestamp
+        // Find next route-related log (ROUTE or USER_EVENT) for duration calculation
         const next = groupLogs[idx + 1];
 
         const durationMs = next
