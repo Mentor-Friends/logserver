@@ -172,7 +172,7 @@ export class LogService {
     // Ensure app log directory exists
     const userLogDir = path.join(this.appLogDir, `user_${userId}`);
     if (!fs.existsSync(userLogDir)) fs.mkdirSync(userLogDir, { recursive: true });
-    const routeLogs = logs.filter(log => log.level === "ROUTE");
+    const routeLogs = logs.filter(log => log.level === "ROUTE" || log.level === "USER_EVENT");
     if (routeLogs.length === 0) return;
     const routeFileName = `app_route_user_${userId}.log`;
     const routeFilePath = path.join(userLogDir, routeFileName);
