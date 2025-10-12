@@ -26,8 +26,11 @@ function parseLogFile(filePath, inpage:number, page: number ) {
         id: startIndex + index + 1, // global id
         message: line
       }));
-
-      return paginatedLogs;
+      const totalPages = Math.ceil(lines.length / limit);
+      return {
+        logs: paginatedLogs,
+        totalpages: totalPages
+      }
     } else {
       console.warn('Log file not found at : ', filePath)
       return [];
