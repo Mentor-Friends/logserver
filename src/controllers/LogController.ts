@@ -5,18 +5,29 @@ import fs from 'fs';
 import { LogService } from '../services/logger.service';
 import * as jwt from 'jsonwebtoken';
 
-function parseLogFile(filePath) {
+function parseLogFile(filePath, inpage:number, page: number ) {
   try {
     if(fs.existsSync(filePath)) {
       const data = fs.readFileSync(filePath, 'utf8');
-      
+      const currentPage = page || 1;  // current page (default 1)
+      const limit = inpage || 10; // items per page (default 10)
       // Example: Convert each line into a JSON object
-      const logs = data.split('\n').filter(line => line).map((line, index) => ({
-          id: index + 1,
-          message: line
+
+      const lines = data.split('\n').filter(line => line);
+      // Calculate pagination indexes
+      const startIndex = (page - 1) * limit;
+      const endIndex = page * limit;
+      // const logs = data.split('\n').filter(line => line).map((line, index) => ({
+      //     id: index + 1,
+      //     message: line
+      // }));
+
+      const paginatedLogs = lines.slice(startIndex, endIndex).map((line, index) => ({
+        id: startIndex + index + 1, // global id
+        message: line
       }));
 
-      return logs;
+      return paginatedLogs;
     } else {
       console.warn('Log file not found at : ', filePath)
       return [];
@@ -31,12 +42,15 @@ function parseLogFile(filePath) {
 export const getPackageLogs = (req: any, res: any) => {
     try{
         const userId = req.query.userId || 998;
+        const query = req.query;
+        let inpage = query.inpage ?? 10;
+        let page = query.page ?? 1;
         let logLocationFolder = process.env.LOGPATH;
         let logType = 'mftsccs';
         let userFolder = 'user_' + userId;
         const logFilePath = path.join(logLocationFolder,logType, userFolder, 'mftsccslog_user_' + `${userId}` +'.log'); 
         console.log("this is the log path", logFilePath);
-        const logs = parseLogFile(logFilePath);
+        const logs = parseLogFile(logFilePath, inpage, page);
         res.json(logs);
     }
     catch(ex){
@@ -48,13 +62,16 @@ export const getPackageLogs = (req: any, res: any) => {
 
 export const getApplicationLogs = (req: any, res: any) => {
     try{
+        const query = req.query;
+        let inpage = query.inpage ?? 10;
+        let page = query.page ?? 1;
         const userId = req.query.userId || 998;
         let logLocationFolder = process.env.LOGPATH;
         let logType = 'application';
         let userFolder = 'user_' + userId;
         const logFilePath = path.join(logLocationFolder,logType, userFolder, 'applog_user_' + `${userId}` +'.log'); 
         console.log("this is the log path", logFilePath);
-        const logs = parseLogFile(logFilePath);
+        const logs = parseLogFile(logFilePath, inpage, page);
         res.json(logs);
     }
     catch(ex){
