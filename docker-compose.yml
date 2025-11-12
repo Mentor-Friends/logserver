@@ -1,0 +1,23 @@
+version: "3.8"
+
+services:
+  app:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - LOGPATH=/app/logs
+      - PORT=3000
+    ports:
+      - "3000:3000"
+    volumes:
+      # named docker volumes -> persist data outside container lifecycle
+      - logs_data:/app/logss
+      - anomaly_data:/app/anomalyData
+    restart: unless-stopped
+
+volumes:
+  logs_data:
+    driver: local
+  anomaly_data:
+    driver: local

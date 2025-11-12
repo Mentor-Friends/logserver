@@ -23,7 +23,7 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
-    "mftsccs-node": "0.0.22",
+    "mftsccs-node": "^0.2.7",
     "ts-node": "^10.9.2"
   }
 }
