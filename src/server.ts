@@ -6,12 +6,15 @@ import { init, CCSConfig } from 'mftsccs-node';
 require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
-const ccsConfig: CCSConfig = {} as CCSConfig; // fill in required properties if there are any
-// base/AI URLs and JWT secret are strings; config goes last
+const ccsConfig = new CCSConfig({
+  aiUrl: process.env.MFTSCCS_AI_URL || '',
+  accessToken: process.env.JWT_SECRET || '',
+});
+
 init(
   process.env.MFTSCCS_BASE_URL || '',
-  process.env.MFTSCCS_AI_URL || '',
-  process.env.JWT_SECRET || '',
+  '',
+  'LogServer',
   ccsConfig
 );
 app.use(express.json({ limit: '50mb' }));
