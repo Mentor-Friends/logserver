@@ -1,5 +1,5 @@
-import LogAnalysisService from "../services/analysis/log-analysis.service";
 import { readGzippedLogFile } from "../services/analysis/readGzippedLogFile";
+import { PageAnalyticsIndexService } from "../services/analytics/page-analytics-index.service";
 import fs from "fs";
 import path from "path";
 
@@ -26,6 +26,116 @@ function getAllUserIds(): number[] {
     .map((f) => Number(f.replace("user_", "")))
     .filter((id) => !isNaN(id));
 }
+
+type UrlMatchMode = "exact" | "path" | "prefix";
+
+function getRequestSource(req: any) {
+  return req.method === "POST" ? req.body : req.query;
+}
+
+function parseOptionalDate(value: any): number | null {
+  if (!value) return null;
+  const time = new Date(String(value)).getTime();
+  return Number.isNaN(time) ? null : time;
+}
+
+export const getPageAnalytics = async (req: any, res: any) => {
+  try {
+    const source = getRequestSource(req);
+    const targetUrl = source.url || source.route || source.webpageUrl;
+
+    if (!targetUrl) {
+      return res.status(400).json({
+        error: "Missing required url parameter",
+        example: "/api/analytics/page?url=https%3A%2F%2Fboomconsole.com%2Fplayground%2F104323081",
+      });
+    }
+
+    const startTime = parseOptionalDate(source.start);
+    const endTime = parseOptionalDate(source.end);
+    if (source.start && startTime === null) {
+      return res.status(400).json({ error: "Invalid start date" });
+    }
+    if (source.end && endTime === null) {
+      return res.status(400).json({ error: "Invalid end date" });
+    }
+    if (startTime !== null && endTime !== null && startTime > endTime) {
+      return res.status(400).json({ error: "start must be before end" });
+    }
+
+    const requestedMatch = String(source.match || "exact");
+    const matchMode: UrlMatchMode = ["exact", "path", "prefix"].includes(requestedMatch)
+      ? (requestedMatch as UrlMatchMode)
+      : "exact";
+    const includeBuckets = source.includeBuckets !== "false";
+    const result = await PageAnalyticsIndexService.getPageAnalytics({
+      url: String(targetUrl),
+      startTime,
+      endTime,
+      match: matchMode,
+      includeBuckets,
+    });
+
+    const summary = result.summary || {};
+    const visits = Number(summary.visits || 0);
+    const events = Number(summary.events || 0);
+    const knownDurationVisits = Number(summary.knownDurationVisits || 0);
+    const unknownDurationVisits = Number(summary.unknownDurationVisits || 0);
+    const totalTimeSpentMs = Number(summary.totalTimeSpentMs || 0);
+    const averageTimeSpentMs = knownDurationVisits
+      ? Math.round(totalTimeSpentMs / knownDurationVisits)
+      : 0;
+
+    res.json({
+      url: String(targetUrl),
+      filters: {
+        start: startTime !== null ? new Date(startTime).toISOString() : null,
+        end: endTime !== null ? new Date(endTime).toISOString() : null,
+        match: matchMode,
+        bucketSizeMinutes: result.bucketSizeMinutes,
+      },
+      normalizedUrl: result.normalizedUrl,
+      summary: {
+        visits,
+        events,
+        knownDurationVisits,
+        unknownDurationVisits,
+        totalTimeSpentMs,
+        totalTimeSpent: formatDuration(totalTimeSpentMs),
+        averageTimeSpentMs,
+        averageTimeSpent: formatDuration(averageTimeSpentMs),
+        minTimeSpentMs: summary.minTimeSpentMs ?? null,
+        minTimeSpent: summary.minTimeSpentMs ? formatDuration(Number(summary.minTimeSpentMs)) : null,
+        maxTimeSpentMs: summary.maxTimeSpentMs ?? null,
+        maxTimeSpent: summary.maxTimeSpentMs ? formatDuration(Number(summary.maxTimeSpentMs)) : null,
+        firstVisit: summary.firstVisit ? new Date(Number(summary.firstVisit)).toISOString() : null,
+        lastVisit: summary.lastVisit ? new Date(Number(summary.lastVisit)).toISOString() : null,
+      },
+      buckets: result.buckets.map((bucket: any) => {
+        const bucketTotalTimeMs = Number(bucket.totalTimeSpentMs || 0);
+        const bucketKnownVisits = Number(bucket.knownDurationVisits || 0);
+        const bucketAverageTimeMs = bucketKnownVisits
+          ? Math.round(bucketTotalTimeMs / bucketKnownVisits)
+          : 0;
+
+        return {
+          bucketStart: new Date(Number(bucket.bucketStart)).toISOString(),
+          visits: Number(bucket.visits || 0),
+          events: Number(bucket.events || 0),
+          knownDurationVisits: bucketKnownVisits,
+          unknownDurationVisits: Number(bucket.unknownDurationVisits || 0),
+          totalTimeSpentMs: bucketTotalTimeMs,
+          totalTimeSpent: formatDuration(bucketTotalTimeMs),
+          averageTimeSpentMs: bucketAverageTimeMs,
+          averageTimeSpent: formatDuration(bucketAverageTimeMs),
+        };
+      }),
+    });
+  } catch (err) {
+    console.error("Error in getPageAnalytics:", err);
+    res.status(500).json({ error: "Failed to get page analytics" });
+  }
+};
 
 // New API: Route analytics table
 // This endpoint aggregates per-route analytics across all users.

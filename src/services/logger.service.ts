@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import zlib from 'zlib'
 import { AnomalyService } from './anomaly/anomaly.service'
+import { PageAnalyticsIndexService } from './analytics/page-analytics-index.service'
 
 export class LogService {
   private static mftsccs: string = 'mftsccs'
@@ -39,7 +40,7 @@ export class LogService {
   }
 
   // Add a log entry for the specified user
-  public static addLog(userId: number, logType: string, logEntry: []): void {
+  public static async addLog(userId: number, logType: string, logEntry: []): Promise<void> {
     try {
       // console.log(`Adding log of ${userId}.`)
       // Add logs to the appropriate user-specific log folder
@@ -51,6 +52,7 @@ export class LogService {
         this.saveLogToFile(userId, this.app, logEntry)
       }
       this.saveRouteLog(userId, logEntry);
+      await PageAnalyticsIndexService.trackLogs(userId, logEntry);
     } catch (error) {
       console.error(`Error adding ${logType} log for user ${userId}:`, error)
     }
