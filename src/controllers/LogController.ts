@@ -111,7 +111,7 @@ export async function addLogs(req:any, res:any): Promise<void>{
       return
     }
     // console.log(userId, logData);
-    LogService.addLog(userId, logType, logData)
+    await LogService.addLog(userId, logType, logData)
     res.status(200).json({ message: 'Log entry added successfully' })
   } catch (error) {
     console.error(`Error adding log: ${error}`)
