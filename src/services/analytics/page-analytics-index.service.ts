@@ -39,39 +39,54 @@ export class PageAnalyticsIndexService {
   private static db: any | null = null;
   private static initPromise: Promise<void> | null = null;
   private static operationQueue: Promise<void> = Promise.resolve();
+  private static staleVisitTimer: ReturnType<typeof setInterval> | null = null;
+  private static pendingLogs: Map<number, RouteLog[]> = new Map();
+  private static flushScheduled = false;
 
-  public static async trackLogs(userId: number, logs: RouteLog[]): Promise<void> {
+  public static trackLogs(userId: number, logs: RouteLog[]): void {
     if (!Array.isArray(logs) || logs.length === 0) return;
-
-    const routeLogs = logs
-      .filter((log) => this.isTrackableRouteLog(log))
-      .map((log) => ({
-        log,
-        timeMs: new Date(log.timestamp as string).getTime(),
-      }))
-      .filter((item) => !Number.isNaN(item.timeMs))
-      .sort((a, b) => a.timeMs - b.timeMs);
-
+    const routeLogs = logs.filter((log) => this.isTrackableRouteLog(log));
     if (routeLogs.length === 0) return;
 
-    await this.write((db) => {
+    const existing = this.pendingLogs.get(userId);
+    if (existing) {
+      existing.push(...routeLogs);
+    } else {
+      this.pendingLogs.set(userId, [...routeLogs]);
+    }
+
+    if (!this.flushScheduled) {
+      this.flushScheduled = true;
+      setImmediate(() => this.flushPendingLogs());
+    }
+  }
+
+  private static flushPendingLogs(): void {
+    this.flushScheduled = false;
+    if (this.pendingLogs.size === 0) return;
+
+    const snapshot = this.pendingLogs;
+    this.pendingLogs = new Map();
+
+    this.write((db) => {
       db.run("BEGIN TRANSACTION");
       try {
-        routeLogs.forEach(({ log, timeMs }) => {
-          this.trackRouteEvent(db, userId, log, timeMs);
+        snapshot.forEach((logs, userId) => {
+          const sorted = logs
+            .map((log) => ({ log, timeMs: new Date(log.timestamp as string).getTime() }))
+            .filter((item) => !Number.isNaN(item.timeMs))
+            .sort((a, b) => a.timeMs - b.timeMs);
+          sorted.forEach(({ log, timeMs }) => this.trackRouteEvent(db, userId, log, timeMs));
         });
         db.run("COMMIT");
       } catch (error) {
         db.run("ROLLBACK");
-        throw error;
       }
-    });
+    }).catch(() => undefined);
   }
 
   public static async getPageAnalytics(query: PageAnalyticsQuery) {
-    return this.write((db) => {
-      this.expireStaleActiveVisits(db, Date.now());
-
+    return this.read((db) => {
       const bucketSizeMinutes = query.bucketSizeMinutes || DEFAULT_BUCKET_SIZE_MINUTES;
       const bucketSizeMs = bucketSizeMinutes * 60 * 1000;
       const normalized = this.normalizeUrl(query.url);
@@ -90,8 +105,8 @@ export class PageAnalyticsIndexService {
       }
 
       if (query.startTime !== null) {
-        whereParts.push("bucket_start + ? > ?");
-        params.push(bucketSizeMs, query.startTime);
+        whereParts.push("bucket_start > ?");
+        params.push(query.startTime - bucketSizeMs);
       }
       if (query.endTime !== null) {
         whereParts.push("bucket_start < ?");
@@ -365,6 +380,11 @@ export class PageAnalyticsIndexService {
     });
   }
 
+  private static async read<T>(operation: (db: any) => T): Promise<T> {
+    await this.ensureDatabase();
+    return operation(this.db);
+  }
+
   private static async write<T>(operation: (db: any) => T): Promise<T> {
     const run = async () => {
       await this.ensureDatabase();
@@ -396,10 +416,23 @@ export class PageAnalyticsIndexService {
     this.db = new Database(dbPath);
     this.attachRunHelper(this.db);
     this.ensureSchema(this.db);
+    this.startStaleVisitExpiry();
+  }
+
+  private static startStaleVisitExpiry(): void {
+    if (this.staleVisitTimer) return;
+    const INTERVAL_MS = 5 * 60 * 1000;
+    this.staleVisitTimer = setInterval(() => {
+      this.write((db) => this.expireStaleActiveVisits(db, Date.now())).catch(() => undefined);
+    }, INTERVAL_MS);
+    if (this.staleVisitTimer.unref) this.staleVisitTimer.unref();
   }
 
   private static ensureSchema(db: any): void {
     db.exec(`
+      PRAGMA journal_mode=WAL;
+      PRAGMA synchronous=NORMAL;
+
       CREATE TABLE IF NOT EXISTS page_url_summary (
         url_key TEXT NOT NULL,
         path_key TEXT NOT NULL,

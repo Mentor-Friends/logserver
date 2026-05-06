@@ -84,7 +84,7 @@ async function run() {
     const { logs, invalidLines } = readUserRouteLogs(logPath, userId);
     totalLogs += logs.length;
     totalInvalidLines += invalidLines;
-    await PageAnalyticsIndexService.trackLogs(userId, logs);
+    PageAnalyticsIndexService.trackLogs(userId, logs);
   }
 
   console.log(
