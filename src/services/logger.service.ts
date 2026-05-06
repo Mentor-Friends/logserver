@@ -52,7 +52,7 @@ export class LogService {
         this.saveLogToFile(userId, this.app, logEntry)
       }
       this.saveRouteLog(userId, logEntry);
-      await PageAnalyticsIndexService.trackLogs(userId, logEntry);
+      PageAnalyticsIndexService.trackLogs(userId, logEntry);
     } catch (error) {
       console.error(`Error adding ${logType} log for user ${userId}:`, error)
     }
