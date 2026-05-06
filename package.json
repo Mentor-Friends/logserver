@@ -4,7 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "pm2 start ecosystem.config.js",
+    "start": "npm run build && pm2 start ecosystem.config.js",
+    "restart": "npm run build && pm2 restart logserver --update-env",
+    "stop": "pm2 stop logserver",
+    "logs": "pm2 logs logserver",
     "dev": "nodemon -r dotenv/config --exec ts-node --ext \"ts,json,yaml\" ./src/server.ts",
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "tsc",
@@ -27,6 +30,7 @@
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
     "mftsccs-node": "0.0.60",
+    "pm2": "^7.0.1",
     "ts-node": "^10.9.2"
   }
 }

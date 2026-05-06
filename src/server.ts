@@ -1,9 +1,9 @@
+import 'dotenv/config';
 import express from 'express';
-import bodyParser from 'body-parser';
 import LogRoutes from './routes/LogRoutes';
 import cors from 'cors';
 import { init } from 'mftsccs-node';
-require('dotenv').config();
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 init(process.env.MFTSCCS_BASE_URL, process.env.MFTSCCS_AI_URL)
