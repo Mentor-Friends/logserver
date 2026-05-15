@@ -4,10 +4,14 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "pm2 start ecosystem.config.js",
+    "start": "npm run build && pm2 start ecosystem.config.js",
+    "restart": "npm run build && pm2 restart logserver --update-env",
+    "stop": "pm2 stop logserver",
+    "logs": "pm2 logs logserver",
     "dev": "nodemon -r dotenv/config --exec ts-node --ext \"ts,json,yaml\" ./src/server.ts",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "tsc"
+    "build": "tsc",
+    "backfill:page-analytics": "ts-node -r dotenv/config ./src/scripts/backfill-page-analytics.ts"
   },
   "keywords": [],
   "author": "",
@@ -19,11 +23,14 @@
     "typescript": "^5.7.3"
   },
   "dependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "better-sqlite3": "^12.9.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
-    "mftsccs-node": "0.0.22",
+    "mftsccs-node": "0.0.60",
+    "pm2": "^7.0.1",
     "ts-node": "^10.9.2"
   }
 }
