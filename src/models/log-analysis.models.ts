@@ -6,6 +6,13 @@ export interface LogEntry {
     url?: string;
     requestFrom?: string;
     sessionId?: number;
+    ipAddress?: string;
+    userAgent?: string;
+    acceptLanguage?: string;
+    referrer?: string;
+    browser?: string;
+    os?: string;
+    deviceType?: string;
   };
   startTime?: number;
   endTime?: number;
@@ -16,6 +23,13 @@ export interface LogEntry {
   sessionId?: number;
   applicationId?: number;
   duration?: number;
+  ipAddress?: string;
+  userAgent?: string;
+  acceptLanguage?: string;
+  referrer?: string;
+  browser?: string;
+  os?: string;
+  deviceType?: string;
 }
 
 export interface RouteAnalytics {

@@ -40,7 +40,7 @@ export class LogService {
   }
 
   // Add a log entry for the specified user
-  public static async addLog(userId: number, logType: string, logEntry: []): Promise<void> {
+  public static async addLog(userId: number, logType: string, logEntry: any[]): Promise<void> {
     try {
       // console.log(`Adding log of ${userId}.`)
       // Add logs to the appropriate user-specific log folder

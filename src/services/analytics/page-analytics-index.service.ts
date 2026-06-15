@@ -12,6 +12,13 @@ type RouteLog = {
     url?: string;
     requestFrom?: string;
     sessionId?: number;
+    ipAddress?: string;
+    userAgent?: string;
+    acceptLanguage?: string;
+    referrer?: string;
+    browser?: string;
+    os?: string;
+    deviceType?: string;
   };
 };
 
