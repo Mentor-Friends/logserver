@@ -41,6 +41,68 @@ function parseLogFile(filePath, inpage:number, page: number ) {
   }
 }
 
+function getRequestIp(req: any): string {
+  return (
+    req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+    req.headers["x-real-ip"] ||
+    req.ip ||
+    "unknown"
+  );
+}
+
+function parseUserAgent(userAgent?: string) {
+  const ua = String(userAgent || "").toLowerCase();
+
+  const deviceType = (() => {
+    if (/bot|crawl|spider|slurp/.test(ua)) return "bot";
+    if (/ipad|tablet/.test(ua)) return "tablet";
+    if (/mobile|iphone|android.*mobile|windows phone/.test(ua)) return "mobile";
+    return "desktop";
+  })();
+
+  const browser = (() => {
+    if (/edg\//.test(ua)) return "Edge";
+    if (/opr\//.test(ua) || /opera/.test(ua)) return "Opera";
+    if (/chrome\//.test(ua) && !/edg\//.test(ua) && !/opr\//.test(ua)) return "Chrome";
+    if (/firefox\//.test(ua)) return "Firefox";
+    if (/safari\//.test(ua) && /version\//.test(ua)) return "Safari";
+    if (/msie|trident/.test(ua)) return "Internet Explorer";
+    return "Unknown";
+  })();
+
+  const os = (() => {
+    if (/windows nt 10/.test(ua)) return "Windows 10";
+    if (/windows nt 6\.3/.test(ua)) return "Windows 8.1";
+    if (/windows nt 6\.2/.test(ua)) return "Windows 8";
+    if (/windows nt 6\.1/.test(ua)) return "Windows 7";
+    if (/android/.test(ua)) return "Android";
+    if (/iphone|ipad|ipod/.test(ua)) return "iOS";
+    if (/mac os x/.test(ua)) return "macOS";
+    if (/linux/.test(ua)) return "Linux";
+    return "Unknown";
+  })();
+
+  return { browser, os, deviceType };
+}
+
+function getRequestMetadata(req: any) {
+  const ipAddress = getRequestIp(req);
+  const userAgent = req.headers["user-agent"] || req.headers["User-Agent"] || "unknown";
+  const acceptLanguage = req.headers["accept-language"] || undefined;
+  const referrer = req.body?.referrer || req.headers["referer"] || req.headers["referrer"];
+  const { browser, os, deviceType } = parseUserAgent(userAgent);
+
+  return {
+    ipAddress,
+    userAgent,
+    acceptLanguage,
+    referrer,
+    browser,
+    os,
+    deviceType,
+  };
+}
+
 
 export const getPackageLogs = (req: any, res: any) => {
     try{
@@ -104,6 +166,23 @@ export async function addLogs(req:any, res:any): Promise<void>{
       res.status(400).json({ message: "Invalid or missing 'logs' data" })
       return
     }
+
+    const requestMetadata = getRequestMetadata(req);
+    const logs = Array.isArray(logData) ? logData : [logData];
+    const enrichedLogs = logs.map((log: any) => ({
+      ...log,
+      ipAddress: log.ipAddress || requestMetadata.ipAddress,
+      userAgent: log.userAgent || requestMetadata.userAgent,
+      acceptLanguage: log.acceptLanguage || requestMetadata.acceptLanguage,
+      referrer: log.referrer || requestMetadata.referrer,
+      browser: log.browser || requestMetadata.browser,
+      os: log.os || requestMetadata.os,
+      deviceType: log.deviceType || requestMetadata.deviceType,
+      data: {
+        ...(log.data || {}),
+      },
+    }))
+
     // Check for payload size
     const MAX_BODY_SIZE = 10 * 1024 * 1024 // 10MB
     if (JSON.stringify(req.body).length > MAX_BODY_SIZE) {
@@ -111,7 +190,7 @@ export async function addLogs(req:any, res:any): Promise<void>{
       return
     }
     // console.log(userId, logData);
-    await LogService.addLog(userId, logType, logData)
+    await LogService.addLog(userId, logType, enrichedLogs)
     res.status(200).json({ message: 'Log entry added successfully' })
   } catch (error) {
     console.error(`Error adding log: ${error}`)

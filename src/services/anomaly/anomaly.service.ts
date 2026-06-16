@@ -13,7 +13,7 @@ export class AnomalyService {
         }
     }
 
-    public static addLogToAnomaly(userId:number, logType:string, logEntry:[]){
+    public static addLogToAnomaly(userId:number, logType:string, logEntry:any[]){
         try {
             // Add userId to each log entry before saving : if logEntry already have logEntry it overwrites
             const enhancedLogEntry = logEntry.map((log:any) => ({
