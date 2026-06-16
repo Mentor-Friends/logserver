@@ -17,6 +17,7 @@ import {
   getTopRedirectUrls,
   getPlatformBreakdown,
   getVisitorIps,
+  getAllArticlesAnalytics,
 } from "../controllers/PreviewVisitController";
 
 const router = express.Router();
@@ -27,16 +28,24 @@ router.get("/check", healthCheck);
 router.get("/package-logs", getPackageLogs);
 router.get("/application-logs", getApplicationLogs);
 
-// Analytics route - only keeping the activity endpoint as requested
+// Route / page analytics
 router.get("/analytics/activity", getUserRouteActivity);
 router.get("/analytics/page", getPageAnalytics);
 router.post("/analytics/page", getPageAnalytics);
 router.post("/analytics/routes-table", getRouteAnalyticsTable);
 
-// Preview visit routes
+// Preview-visit routes
 router.post("/preview-visit/track", trackPreviewVisit);
+
+//comprehensive analytics across ALL articles
+router.get("/preview-visit/articles", getAllArticlesAnalytics);
+
+// Per-blog analytics (enhanced – now returns full breakdown)
 router.get("/preview-visit/by-blog", getVisitsByBlog);
+
+// Existing helpers
 router.get("/preview-visit/top-redirects", getTopRedirectUrls);
 router.get("/preview-visit/platforms", getPlatformBreakdown);
 router.get("/preview-visit/visitor-ips", getVisitorIps);
+
 export default router;

@@ -42,7 +42,27 @@ export class PreviewVisitService {
     `);
   }
 
-  // Save one visit row
+  // ─── helpers ────────────────────────────────────────────────────────────────
+
+  private static timeFilter(
+    params: any[],
+    start?: number,
+    end?: number,
+  ): string {
+    let sql = "";
+    if (start) {
+      sql += " AND visited_at >= ?";
+      params.push(start);
+    }
+    if (end) {
+      sql += " AND visited_at <= ?";
+      params.push(end);
+    }
+    return sql;
+  }
+
+  // ─── record ─────────────────────────────────────────────────────────────────
+
   public static recordVisit(data: {
     blog_id: string;
     redirect_url: string;
@@ -71,106 +91,361 @@ export class PreviewVisitService {
     );
   }
 
-  // Total visits for a blog_id
+  // ─── existing helpers (kept for backwards-compat) ───────────────────────────
+
   public static getVisitsByBlog(blog_id: string, start?: number, end?: number) {
     const db = this.getDb();
-    let sql = `SELECT COUNT(*) as total_visits,
-                      COUNT(DISTINCT ip_address) as unique_visitors,
-                      MIN(visited_at) as first_visit,
-                      MAX(visited_at) as last_visit,
-                      redirect_url
-               FROM preview_visits
-               WHERE blog_id = ?`;
     const params: any[] = [blog_id];
-    if (start) {
-      sql += ` AND visited_at >= ?`;
-      params.push(start);
-    }
-    if (end) {
-      sql += ` AND visited_at <= ?`;
-      params.push(end);
-    }
-    sql += ` GROUP BY redirect_url`;
-    return db.prepare(sql).all(params);
+    const tf = this.timeFilter(params, start, end);
+    return db
+      .prepare(
+        `
+      SELECT COUNT(*) as total_visits,
+             COUNT(DISTINCT ip_address) as unique_visitors,
+             MIN(visited_at) as first_visit,
+             MAX(visited_at) as last_visit,
+             redirect_url
+      FROM preview_visits
+      WHERE blog_id = ?${tf}
+      GROUP BY redirect_url
+    `,
+      )
+      .all(params);
   }
 
-  // Top redirect_urls by click count
   public static getTopRedirectUrls(limit = 10, start?: number, end?: number) {
     const db = this.getDb();
-    let sql = `SELECT redirect_url,
-                      COUNT(*) as total_clicks,
-                      COUNT(DISTINCT blog_id) as article_count,
-                      COUNT(DISTINCT ip_address) as unique_visitors
-               FROM preview_visits WHERE 1=1`;
     const params: any[] = [];
-    if (start) {
-      sql += ` AND visited_at >= ?`;
-      params.push(start);
-    }
-    if (end) {
-      sql += ` AND visited_at <= ?`;
-      params.push(end);
-    }
-    sql += ` GROUP BY redirect_url ORDER BY total_clicks DESC LIMIT ?`;
+    const tf = this.timeFilter(params, start, end);
     params.push(limit);
-    return db.prepare(sql).all(params);
+    return db
+      .prepare(
+        `
+      SELECT redirect_url,
+             COUNT(*) as total_clicks,
+             COUNT(DISTINCT blog_id) as article_count,
+             COUNT(DISTINCT ip_address) as unique_visitors
+      FROM preview_visits WHERE 1=1${tf}
+      GROUP BY redirect_url ORDER BY total_clicks DESC LIMIT ?
+    `,
+      )
+      .all(params);
   }
 
-  // Platform breakdown (which referrer sent the most visitors)
   public static getPlatformBreakdown(
     blog_id?: string,
     start?: number,
     end?: number,
   ) {
     const db = this.getDb();
-    let sql = `SELECT
-                 COALESCE(referrer_host, 'Direct / Unknown') as platform,
-                 COUNT(*) as visits,
-                 COUNT(DISTINCT ip_address) as unique_visitors
-               FROM preview_visits WHERE 1=1`;
     const params: any[] = [];
+    let sql = `
+      SELECT COALESCE(referrer_host, 'Direct / Unknown') as platform,
+             COUNT(*) as visits,
+             COUNT(DISTINCT ip_address) as unique_visitors
+      FROM preview_visits WHERE 1=1`;
     if (blog_id) {
-      sql += ` AND blog_id = ?`;
+      sql += " AND blog_id = ?";
       params.push(blog_id);
     }
-    if (start) {
-      sql += ` AND visited_at >= ?`;
-      params.push(start);
-    }
-    if (end) {
-      sql += ` AND visited_at <= ?`;
-      params.push(end);
-    }
-    sql += ` GROUP BY platform ORDER BY visits DESC`;
+    sql += this.timeFilter(params, start, end);
+    sql += " GROUP BY platform ORDER BY visits DESC";
     return db.prepare(sql).all(params);
   }
 
-  // Visits grouped by IP for a blog
   public static getVisitorIps(blog_id?: string, start?: number, end?: number) {
     const db = this.getDb();
-    let sql = `SELECT
-                ip_address,
-                COUNT(*) as visits,
-                COUNT(DISTINCT blog_id) as articles_visited,
-                MIN(visited_at) as first_seen,
-                MAX(visited_at) as last_seen,
-                referrer_host as last_platform
-                FROM preview_visits
-                WHERE ip_address IS NOT NULL`;
     const params: any[] = [];
+    let sql = `
+      SELECT ip_address,
+             COUNT(*) as visits,
+             COUNT(DISTINCT blog_id) as articles_visited,
+             MIN(visited_at) as first_seen,
+             MAX(visited_at) as last_seen,
+             referrer_host as last_platform
+      FROM preview_visits
+      WHERE ip_address IS NOT NULL`;
     if (blog_id) {
-      sql += ` AND blog_id = ?`;
+      sql += " AND blog_id = ?";
       params.push(blog_id);
     }
-    if (start) {
-      sql += ` AND visited_at >= ?`;
-      params.push(start);
-    }
-    if (end) {
-      sql += ` AND visited_at <= ?`;
-      params.push(end);
-    }
-    sql += ` GROUP BY ip_address ORDER BY visits DESC`;
+    sql += this.timeFilter(params, start, end);
+    sql += " GROUP BY ip_address ORDER BY visits DESC";
     return db.prepare(sql).all(params);
+  }
+
+  // ─── NEW: full article analytics (all blogs) ────────────────────────────────
+
+  /**
+   * Returns a comprehensive overview across ALL blogs / articles.
+   *
+   * Shape:
+   * {
+   *   summary: { total_visits, total_clicks, total_unique_visitors,
+   *              total_articles, total_redirect_urls, first_visit, last_visit },
+   *   top_redirect_url: string | null,
+   *   redirect_urls: [ { url, total_visits, total_clicks, unique_visitors,
+   *                       articles_linked, first_click, last_click } ],
+   *   referral_urls:  [ { url, visits, clicks, unique_visitors } ],
+   *   articles: [
+   *     { blog_id, total_visits, total_clicks, unique_visitors,
+   *       first_visit, last_visit,
+   *       redirect_urls: [...], referral_urls: [...] }
+   *   ]
+   * }
+   */
+  public static getAllArticlesAnalytics(start?: number, end?: number) {
+    const db = this.getDb();
+    const params: any[] = [];
+    const tf = this.timeFilter(params, start, end);
+
+    // ── overall summary ──────────────────────────────────────────────────────
+    const summary = db
+      .prepare(
+        `
+      SELECT
+        COUNT(*)                       AS total_visits,
+        COUNT(*)                       AS total_clicks,
+        COUNT(DISTINCT ip_address)     AS total_unique_visitors,
+        COUNT(DISTINCT blog_id)        AS total_articles,
+        COUNT(DISTINCT redirect_url)   AS total_redirect_urls,
+        MIN(visited_at)                AS first_visit,
+        MAX(visited_at)                AS last_visit
+      FROM preview_visits WHERE 1=1${tf}
+    `,
+      )
+      .get(params);
+
+    // ── top redirect URL by click count ─────────────────────────────────────
+    const topRow = db
+      .prepare(
+        `
+      SELECT redirect_url
+      FROM preview_visits WHERE 1=1${tf}
+      GROUP BY redirect_url
+      ORDER BY COUNT(*) DESC
+      LIMIT 1
+    `,
+      )
+      .get(params);
+
+    // ── per redirect_url breakdown ───────────────────────────────────────────
+    const redirect_urls = db
+      .prepare(
+        `
+      SELECT
+        redirect_url                        AS url,
+        COUNT(*)                            AS total_visits,
+        COUNT(*)                            AS total_clicks,
+        COUNT(DISTINCT ip_address)          AS unique_visitors,
+        COUNT(DISTINCT blog_id)             AS articles_linked,
+        MIN(visited_at)                     AS first_click,
+        MAX(visited_at)                     AS last_click
+      FROM preview_visits WHERE 1=1${tf}
+      GROUP BY redirect_url
+      ORDER BY total_clicks DESC
+    `,
+      )
+      .all(params);
+
+    // ── referral / platform breakdown ────────────────────────────────────────
+    const referral_urls = db
+      .prepare(
+        `
+      SELECT
+        COALESCE(referrer_host, 'Direct / Unknown') AS url,
+        COUNT(*)                                    AS visits,
+        COUNT(*)                                    AS clicks,
+        COUNT(DISTINCT ip_address)                  AS unique_visitors
+      FROM preview_visits WHERE 1=1${tf}
+      GROUP BY referrer_host
+      ORDER BY visits DESC
+    `,
+      )
+      .all(params);
+
+    // ── per-article breakdown ────────────────────────────────────────────────
+    const articleIds: { blog_id: string }[] = db
+      .prepare(
+        `
+      SELECT DISTINCT blog_id
+      FROM preview_visits WHERE 1=1${tf}
+      ORDER BY blog_id
+    `,
+      )
+      .all(params);
+
+    const articles = articleIds.map(({ blog_id }) => {
+      const aParams: any[] = [blog_id];
+      const atf = this.timeFilter(aParams, start, end);
+
+      const aHead = db
+        .prepare(
+          `
+        SELECT
+          COUNT(*)                       AS total_visits,
+          COUNT(*)                       AS total_clicks,
+          COUNT(DISTINCT ip_address)     AS unique_visitors,
+          MIN(visited_at)                AS first_visit,
+          MAX(visited_at)                AS last_visit
+        FROM preview_visits WHERE blog_id = ?${atf}
+      `,
+        )
+        .get(aParams);
+
+      const aRedirects = db
+        .prepare(
+          `
+        SELECT
+          redirect_url                   AS url,
+          COUNT(*)                       AS total_visits,
+          COUNT(*)                       AS total_clicks,
+          COUNT(DISTINCT ip_address)     AS unique_visitors,
+          MIN(visited_at)                AS first_click,
+          MAX(visited_at)                AS last_click
+        FROM preview_visits WHERE blog_id = ?${atf}
+        GROUP BY redirect_url
+        ORDER BY total_clicks DESC
+      `,
+        )
+        .all(aParams);
+
+      const aReferrals = db
+        .prepare(
+          `
+        SELECT
+          COALESCE(referrer_host, 'Direct / Unknown') AS url,
+          COUNT(*)                                    AS visits,
+          COUNT(*)                                    AS clicks,
+          COUNT(DISTINCT ip_address)                  AS unique_visitors
+        FROM preview_visits WHERE blog_id = ?${atf}
+        GROUP BY referrer_host
+        ORDER BY visits DESC
+      `,
+        )
+        .all(aParams);
+
+      return {
+        blog_id,
+        ...aHead,
+        redirect_urls: aRedirects,
+        referral_urls: aReferrals,
+      };
+    });
+
+    return {
+      summary,
+      top_redirect_url: topRow?.redirect_url ?? null,
+      redirect_urls,
+      referral_urls,
+      articles,
+    };
+  }
+
+  // ─── NEW: detailed analytics for ONE blog ───────────────────────────────────
+
+  /**
+   * Returns all details for a single blog_id:
+   * {
+   *   blog_id,
+   *   summary: { total_visits, total_clicks, unique_visitors, first_visit, last_visit },
+   *   top_redirect_url: string | null,
+   *   redirect_urls: [...],
+   *   referral_urls: [...],
+   *   visitor_ips:   [...]
+   * }
+   */
+  public static getBlogAnalytics(
+    blog_id: string,
+    start?: number,
+    end?: number,
+  ) {
+    const db = this.getDb();
+    const base: any[] = [blog_id];
+    const tf = this.timeFilter(base, start, end);
+
+    const summary = db
+      .prepare(
+        `
+      SELECT
+        COUNT(*)                       AS total_visits,
+        COUNT(*)                       AS total_clicks,
+        COUNT(DISTINCT ip_address)     AS unique_visitors,
+        MIN(visited_at)                AS first_visit,
+        MAX(visited_at)                AS last_visit
+      FROM preview_visits WHERE blog_id = ?${tf}
+    `,
+      )
+      .get(base);
+
+    const topRow = db
+      .prepare(
+        `
+      SELECT redirect_url
+      FROM preview_visits WHERE blog_id = ?${tf}
+      GROUP BY redirect_url
+      ORDER BY COUNT(*) DESC
+      LIMIT 1
+    `,
+      )
+      .get(base);
+
+    const redirect_urls = db
+      .prepare(
+        `
+      SELECT
+        redirect_url                   AS url,
+        COUNT(*)                       AS total_visits,
+        COUNT(*)                       AS total_clicks,
+        COUNT(DISTINCT ip_address)     AS unique_visitors,
+        MIN(visited_at)                AS first_click,
+        MAX(visited_at)                AS last_click
+      FROM preview_visits WHERE blog_id = ?${tf}
+      GROUP BY redirect_url
+      ORDER BY total_clicks DESC
+    `,
+      )
+      .all(base);
+
+    const referral_urls = db
+      .prepare(
+        `
+      SELECT
+        COALESCE(referrer_host, 'Direct / Unknown') AS url,
+        COUNT(*)                                    AS visits,
+        COUNT(*)                                    AS clicks,
+        COUNT(DISTINCT ip_address)                  AS unique_visitors
+      FROM preview_visits WHERE blog_id = ?${tf}
+      GROUP BY referrer_host
+      ORDER BY visits DESC
+    `,
+      )
+      .all(base);
+
+    const visitor_ips = db
+      .prepare(
+        `
+      SELECT
+        ip_address,
+        COUNT(*)           AS visits,
+        MIN(visited_at)    AS first_seen,
+        MAX(visited_at)    AS last_seen,
+        referrer_host      AS last_platform
+      FROM preview_visits
+      WHERE blog_id = ? AND ip_address IS NOT NULL${tf}
+      GROUP BY ip_address
+      ORDER BY visits DESC
+    `,
+      )
+      .all(base);
+
+    return {
+      blog_id,
+      summary,
+      top_redirect_url: topRow?.redirect_url ?? null,
+      redirect_urls,
+      referral_urls,
+      visitor_ips,
+    };
   }
 }
