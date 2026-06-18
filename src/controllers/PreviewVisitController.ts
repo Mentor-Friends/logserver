@@ -18,12 +18,33 @@ function getIp(req: any): string {
   );
 }
 
+function parseQueryDate(
+  value: any,
+  bound: "start" | "end",
+): number | undefined {
+  if (!value) return undefined;
+
+  const raw = String(value).trim();
+  if (!raw) return undefined;
+
+  if (/^\d+$/.test(raw)) {
+    const numeric = Number(raw);
+    return Number.isNaN(numeric) ? undefined : numeric;
+  }
+
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(raw);
+  const normalized = dateOnly
+    ? `${raw}T${bound === "start" ? "00:00:00.000" : "23:59:59.999"}`
+    : raw;
+  const parsed = new Date(normalized).getTime();
+
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
+
 function parseTimeRange(query: any): { start?: number; end?: number } {
-  const start = query.start ? new Date(query.start).getTime() : undefined;
-  const end = query.end ? new Date(query.end).getTime() : undefined;
   return {
-    start: start && !isNaN(start) ? start : undefined,
-    end: end && !isNaN(end) ? end : undefined,
+    start: parseQueryDate(query.start, "start"),
+    end: parseQueryDate(query.end, "end"),
   };
 }
 
