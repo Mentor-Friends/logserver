@@ -1,4 +1,5 @@
 import { PreviewVisitService } from "../services/analytics/preview-visit.service";
+import * as jwt from "jsonwebtoken";
 
 function parseReferrerHost(referrer?: string): string | undefined {
   if (!referrer) return undefined;
@@ -48,11 +49,39 @@ function parseTimeRange(query: any): { start?: number; end?: number } {
   };
 }
 
+function getAuthenticatedEntityId(req: any): string | undefined {
+  const requestUserId = req.user?.userId;
+  if (requestUserId !== undefined && requestUserId !== null) {
+    return String(requestUserId);
+  }
+
+  const authToken = req.header("authorization");
+  const token = authToken?.trim()?.split(" ")?.pop();
+  if (!token) return undefined;
+
+  try {
+    const decodedToken = jwt.verify(token, process.env.JWT_SECRET) as any;
+    const userId = Number(decodedToken?.unique_name);
+    return Number.isFinite(userId) ? String(userId) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function requireAuthenticatedEntityId(req: any, res: any): string | null {
+  const entityId = getAuthenticatedEntityId(req);
+  if (!entityId) {
+    res.status(401).json({ error: "Authentication required" });
+    return null;
+  }
+  return entityId;
+}
+
 // ─── POST /api/preview-visit/track ──────────────────────────────────────────
 
 export const trackPreviewVisit = (req: any, res: any) => {
   try {
-    const { preview_url, session_id } = req.body;
+    const { preview_url, session_id, entity_id } = req.body;
 
     if (!preview_url) {
       return res.status(400).json({ error: "preview_url is required" });
@@ -71,9 +100,11 @@ export const trackPreviewVisit = (req: any, res: any) => {
     const referrer = req.body.referrer || req.headers["referer"];
     const referrer_host = parseReferrerHost(referrer);
     const ip_address = getIp(req);
+    const resolvedEntityId = getAuthenticatedEntityId(req) || (entity_id ? String(entity_id) : undefined);
 
     PreviewVisitService.recordVisit({
       blog_id,
+      entity_id: resolvedEntityId,
       redirect_url,
       preview_url,
       referrer,
@@ -88,7 +119,6 @@ export const trackPreviewVisit = (req: any, res: any) => {
     res.status(500).json({ error: "Failed to record visit" });
   }
 };
-
 // ─── GET /api/preview-visit/by-blog?blog_id=106356054 ───────────────────────
 // Now returns full analytics for the given blog (redirect_urls, referrals,
 // visitor IPs, summary) instead of just a flat list.
@@ -99,10 +129,13 @@ export const getVisitsByBlog = (req: any, res: any) => {
     if (!blog_id) return res.status(400).json({ error: "blog_id required" });
 
     const { start, end } = parseTimeRange(req.query);
+    const entity_id = requireAuthenticatedEntityId(req, res);
+    if (!entity_id) return;
     const data = PreviewVisitService.getBlogAnalytics(
       String(blog_id),
       start,
       end,
+      entity_id,
     );
     res.json(data);
   } catch (err) {
@@ -117,10 +150,13 @@ export const getTopRedirectUrls = (req: any, res: any) => {
   try {
     const { limit } = req.query;
     const { start, end } = parseTimeRange(req.query);
+    const entity_id = requireAuthenticatedEntityId(req, res);
+    if (!entity_id) return;
     const data = PreviewVisitService.getTopRedirectUrls(
       Number(limit) || 10,
       start,
       end,
+      entity_id,
     );
     res.json({ data });
   } catch (err) {
@@ -135,10 +171,13 @@ export const getPlatformBreakdown = (req: any, res: any) => {
   try {
     const { blog_id } = req.query;
     const { start, end } = parseTimeRange(req.query);
+    const entity_id = requireAuthenticatedEntityId(req, res);
+    if (!entity_id) return;
     const data = PreviewVisitService.getPlatformBreakdown(
       blog_id ? String(blog_id) : undefined,
       start,
       end,
+      entity_id,
     );
     res.json({ data });
   } catch (err) {
@@ -153,10 +192,13 @@ export const getVisitorIps = (req: any, res: any) => {
   try {
     const { blog_id } = req.query;
     const { start, end } = parseTimeRange(req.query);
+    const entity_id = requireAuthenticatedEntityId(req, res);
+    if (!entity_id) return;
     const data = PreviewVisitService.getVisitorIps(
       blog_id ? String(blog_id) : undefined,
       start,
       end,
+      entity_id,
     );
     res.json({ data });
   } catch (err) {
@@ -175,7 +217,13 @@ export const getVisitorIps = (req: any, res: any) => {
 export const getAllArticlesAnalytics = (req: any, res: any) => {
   try {
     const { start, end } = parseTimeRange(req.query);
-    const data = PreviewVisitService.getAllArticlesAnalytics(start, end);
+    const entity_id = requireAuthenticatedEntityId(req, res);
+    if (!entity_id) return;
+    const data = PreviewVisitService.getAllArticlesAnalytics(
+      start,
+      end,
+      entity_id,
+    );
     res.json(data);
   } catch (err) {
     console.error("Error in getAllArticlesAnalytics:", err);
