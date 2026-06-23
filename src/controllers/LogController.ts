@@ -1,19 +1,19 @@
 // src/controllers/LogController.ts
-import { Response } from 'express';
-import path from 'path';
-import fs from 'fs';
-import { LogService } from '../services/logger.service';
-import * as jwt from 'jsonwebtoken';
+import { Response } from "express";
+import path from "path";
+import fs from "fs";
+import { LogService } from "../services/logger.service";
+import * as jwt from "jsonwebtoken";
 
-function parseLogFile(filePath, inpage:number, page: number ) {
+function parseLogFile(filePath, inpage: number, page: number) {
   try {
-    if(fs.existsSync(filePath)) {
-      const data = fs.readFileSync(filePath, 'utf8');
-      const currentPage = page || 1;  // current page (default 1)
+    if (fs.existsSync(filePath)) {
+      const data = fs.readFileSync(filePath, "utf8");
+      const currentPage = page || 1; // current page (default 1)
       const limit = inpage || 10; // items per page (default 10)
       // Example: Convert each line into a JSON object
 
-      const lines = data.split('\n').filter(line => line);
+      const lines = data.split("\n").filter((line) => line);
       // Calculate pagination indexes
       const startIndex = (page - 1) * limit;
       const endIndex = page * limit;
@@ -22,22 +22,24 @@ function parseLogFile(filePath, inpage:number, page: number ) {
       //     message: line
       // }));
 
-      const paginatedLogs = lines.slice(startIndex, endIndex).map((line, index) => ({
-        id: startIndex + index + 1, // global id
-        message: line
-      }));
+      const paginatedLogs = lines
+        .slice(startIndex, endIndex)
+        .map((line, index) => ({
+          id: startIndex + index + 1, // global id
+          message: line,
+        }));
       const totalPages = Math.ceil(lines.length / limit);
       return {
         logs: paginatedLogs,
-        totalpages: totalPages
-      }
+        totalpages: totalPages,
+      };
     } else {
-      console.warn('Log file not found at : ', filePath)
+      console.warn("Log file not found at : ", filePath);
       return [];
     }
   } catch (err) {
-      console.error('Error reading log file:', err);
-      return [];
+    console.error("Error reading log file:", err);
+    return [];
   }
 }
 
@@ -63,7 +65,8 @@ function parseUserAgent(userAgent?: string) {
   const browser = (() => {
     if (/edg\//.test(ua)) return "Edge";
     if (/opr\//.test(ua) || /opera/.test(ua)) return "Opera";
-    if (/chrome\//.test(ua) && !/edg\//.test(ua) && !/opr\//.test(ua)) return "Chrome";
+    if (/chrome\//.test(ua) && !/edg\//.test(ua) && !/opr\//.test(ua))
+      return "Chrome";
     if (/firefox\//.test(ua)) return "Firefox";
     if (/safari\//.test(ua) && /version\//.test(ua)) return "Safari";
     if (/msie|trident/.test(ua)) return "Internet Explorer";
@@ -87,9 +90,11 @@ function parseUserAgent(userAgent?: string) {
 
 function getRequestMetadata(req: any) {
   const ipAddress = getRequestIp(req);
-  const userAgent = req.headers["user-agent"] || req.headers["User-Agent"] || "unknown";
+  const userAgent =
+    req.headers["user-agent"] || req.headers["User-Agent"] || "unknown";
   const acceptLanguage = req.headers["accept-language"] || undefined;
-  const referrer = req.body?.referrer || req.headers["referer"] || req.headers["referrer"];
+  const referrer =
+    req.body?.referrer || req.headers["referer"] || req.headers["referrer"];
   const { browser, os, deviceType } = parseUserAgent(userAgent);
 
   return {
@@ -103,68 +108,74 @@ function getRequestMetadata(req: any) {
   };
 }
 
-
 export const getPackageLogs = (req: any, res: any) => {
-    try{
-        const userId = req.query.userId || 998;
-        const query = req.query;
-        let inpage = query.inpage ?? 10;
-        let page = query.page ?? 1;
-        let logLocationFolder = process.env.LOGPATH;
-        let logType = 'mftsccs';
-        let userFolder = 'user_' + userId;
-        const logFilePath = path.join(logLocationFolder,logType, userFolder, 'mftsccslog_user_' + `${userId}` +'.log'); 
-        console.log("this is the log path", logFilePath);
-        const logs = parseLogFile(logFilePath, inpage, page);
-        res.json(logs);
-    }
-    catch(ex){
-        throw ex;
-    }
+  try {
+    const userId = req.query.userId || 998;
+    const query = req.query;
+    let inpage = query.inpage ?? 10;
+    let page = query.page ?? 1;
+    let logLocationFolder = process.env.LOGPATH;
+    let logType = "mftsccs";
+    let userFolder = "user_" + userId;
+    const logFilePath = path.join(
+      logLocationFolder,
+      logType,
+      userFolder,
+      "mftsccslog_user_" + `${userId}` + ".log",
+    );
+    console.log("this is the log path", logFilePath);
+    const logs = parseLogFile(logFilePath, inpage, page);
+    res.json(logs);
+  } catch (ex) {
+    throw ex;
+  }
 
- // res.status(200).json({ message: 'Get all logs' });
+  // res.status(200).json({ message: 'Get all logs' });
 };
 
 export const getApplicationLogs = (req: any, res: any) => {
-    try{
-        const query = req.query;
-        let inpage = query.inpage ?? 10;
-        let page = query.page ?? 1;
-        const userId = req.query.userId || 998;
-        let logLocationFolder = process.env.LOGPATH;
-        let logType = 'application';
-        let userFolder = 'user_' + userId;
-        const logFilePath = path.join(logLocationFolder,logType, userFolder, 'applog_user_' + `${userId}` +'.log'); 
-        console.log("this is the log path", logFilePath);
-        const logs = parseLogFile(logFilePath, inpage, page);
-        res.json(logs);
-    }
-    catch(ex){
-        throw ex;
-    }
+  try {
+    const query = req.query;
+    let inpage = query.inpage ?? 10;
+    let page = query.page ?? 1;
+    const userId = req.query.userId || 998;
+    let logLocationFolder = process.env.LOGPATH;
+    let logType = "application";
+    let userFolder = "user_" + userId;
+    const logFilePath = path.join(
+      logLocationFolder,
+      logType,
+      userFolder,
+      "applog_user_" + `${userId}` + ".log",
+    );
+    console.log("this is the log path", logFilePath);
+    const logs = parseLogFile(logFilePath, inpage, page);
+    res.json(logs);
+  } catch (ex) {
+    throw ex;
+  }
 
- // res.status(200).json({ message: 'Get all logs' });
+  // res.status(200).json({ message: 'Get all logs' });
 };
 
-
-export async function addLogs(req:any, res:any): Promise<void>{
+export async function addLogs(req: any, res: any): Promise<void> {
   try {
     // Check if user is authenticated
-    const authToken = req.header('authorization')
-    const token:string | undefined = authToken?.trim()?.split(' ')?.pop()
-    let userId = 998
+    const authToken = req.header("authorization");
+    const token: string | undefined = authToken?.trim()?.split(" ")?.pop();
+    let userId = 998;
 
-    if(token){
-      userId = await decodedTokenForUserId(token) ?? 998;
+    if (token) {
+      userId = (await decodedTokenForUserId(token)) ?? 998;
       //  const userId = req.user?.userId ?? 998;
     }
     // console.log(`Log of : ${userId}`);
-    
+
     // Check for logType and logData
-    const { logType, logData } = req.body
+    const { logType, logData } = req.body;
     if (!logType || !logData) {
-      res.status(400).json({ message: "Invalid or missing 'logs' data" })
-      return
+      res.status(400).json({ message: "Invalid or missing 'logs' data" });
+      return;
     }
 
     const requestMetadata = getRequestMetadata(req);
@@ -181,42 +192,39 @@ export async function addLogs(req:any, res:any): Promise<void>{
       data: {
         ...(log.data || {}),
       },
-    }))
+    }));
 
     // Check for payload size
-    const MAX_BODY_SIZE = 10 * 1024 * 1024 // 10MB
+    const MAX_BODY_SIZE = 10 * 1024 * 1024; // 10MB
     if (JSON.stringify(req.body).length > MAX_BODY_SIZE) {
-      res.status(413).json({ message: 'Payload too large' })
-      return
+      res.status(413).json({ message: "Payload too large" });
+      return;
     }
     // console.log(userId, logData);
-    await LogService.addLog(userId, logType, enrichedLogs)
-    res.status(200).json({ message: 'Log entry added successfully' })
+    await LogService.addLog(userId, logType, enrichedLogs);
+    res.status(200).json({ message: "Log entry added successfully" });
   } catch (error) {
-    console.error(`Error adding log: ${error}`)
-    res.status(500).json({ message: 'Internal Server Error' })
+    console.error(`Error adding log: ${error}`);
+    res.status(500).json({ message: "Internal Server Error" });
   }
 }
 
-
 // Helper Function to decode the token and extract the userId
-function decodedTokenForUserId(token:string) {
-
+function decodedTokenForUserId(token: string) {
   try {
-    if(!token) return null;
-    const parts = token.split('.');
-    if(parts.length !==3) {
+    if (!token) return null;
+    const parts = token.split(".");
+    if (parts.length !== 3) {
       return null;
     }
     const decodedToken = jwt.verify(token, process.env.JWT_SECRET);
-    if(decodedToken){
-      return Number(decodedToken?.unique_name);
+    if (decodedToken && typeof decodedToken !== "string") {
+      return Number(decodedToken.unique_name);
     } else {
       return null;
     }
   } catch (error) {
     // console.error("Token validation failed : ", error);
-    return null
+    return null;
   }
-
 }
