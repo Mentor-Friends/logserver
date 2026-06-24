@@ -1,3 +1,4 @@
+import { GetRelationRaw } from "mftsccs-node";
 import { PreviewVisitService } from "../services/analytics/preview-visit.service";
 import * as jwt from "jsonwebtoken";
 
@@ -50,7 +51,7 @@ function parseTimeRange(query: any): { start?: number; end?: number } {
 }
 
 function getAuthenticatedEntityId(req: any): string | undefined {
-  const requestUserId = req.user?.userId;
+  const requestUserId = req.user?.entityId;
   if (requestUserId !== undefined && requestUserId !== null) {
     return String(requestUserId);
   }
@@ -79,7 +80,7 @@ function requireAuthenticatedEntityId(req: any, res: any): string | null {
 
 // ─── POST /api/preview-visit/track ──────────────────────────────────────────
 
-export const trackPreviewVisit = (req: any, res: any) => {
+export const trackPreviewVisit = async (req: any, res: any) => {
   try {
     const { preview_url, session_id, entity_id } = req.body;
 
@@ -97,10 +98,38 @@ export const trackPreviewVisit = (req: any, res: any) => {
         .json({ error: "blog_id and redirect_url must be in preview_url" });
     }
 
+    // Resolve which entity owns this blog via the relation graph.
+    // This is the only reliable way to get entity_id on unauthenticated
+    // browser-originated redirect hits (no JWT present).
+    let entityIdFromBlog: string | undefined;
+    try {
+      const relationResult = await GetRelationRaw(
+        Number(blog_id),
+        "the_entity_s_blog",
+        10,
+        1,
+        true,
+      );
+      if (
+        Array.isArray(relationResult) &&
+        relationResult.length > 0 &&
+        relationResult[0]?.id
+      ) {
+        entityIdFromBlog = String(relationResult[0].id);
+      }
+    } catch (relationErr) {
+      // Don't let a relation lookup failure block visit tracking
+      console.error("Error resolving entity for blog_id", blog_id, relationErr);
+    }
+
     const referrer = req.body.referrer || req.headers["referer"];
     const referrer_host = parseReferrerHost(referrer);
     const ip_address = getIp(req);
-    const resolvedEntityId = getAuthenticatedEntityId(req) || (entity_id ? String(entity_id) : undefined);
+
+    const resolvedEntityId =
+      getAuthenticatedEntityId(req) ||
+      entityIdFromBlog ||
+      (entity_id ? String(entity_id) : undefined);
 
     PreviewVisitService.recordVisit({
       blog_id,
@@ -218,6 +247,7 @@ export const getAllArticlesAnalytics = (req: any, res: any) => {
   try {
     const { start, end } = parseTimeRange(req.query);
     const entity_id = requireAuthenticatedEntityId(req, res);
+    // const entity_id = "104456291";
     if (!entity_id) return;
     const data = PreviewVisitService.getAllArticlesAnalytics(
       start,

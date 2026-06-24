@@ -22,7 +22,7 @@ const verifyRequestToken = (req: any, res: any, next: any) => {
         userId: Number(decodedToken.unique_name),
         userConcept: Number(decodedToken.upn),
         email: decodedToken.email,
-        // token: decodedToken,
+        entityId: Number(decodedToken.EntityId),
         token: token,
       };
       next();
