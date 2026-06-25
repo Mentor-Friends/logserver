@@ -8,6 +8,8 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 init(process.env.MFTSCCS_BASE_URL, process.env.MFTSCCS_AI_URL)
 app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.set('trust proxy', true);
 // app.use(bodyParser.json());
 app.use(cors({
   origin : '*',

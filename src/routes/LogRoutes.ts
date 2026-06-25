@@ -37,6 +37,7 @@ router.post("/analytics/routes-table", getRouteAnalyticsTable);
 
 // Preview-visit routes
 router.post("/preview-visit/track", trackPreviewVisit);
+router.get("/preview-visit/track", trackPreviewVisit);
 
 //comprehensive analytics across ALL articles
 router.get("/preview-visit/articles", verifyRequestToken, getAllArticlesAnalytics);

@@ -20,6 +20,124 @@ function getIp(req: any): string {
   );
 }
 
+function firstDefined(...values: any[]) {
+  for (const value of values) {
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function parseMaybeJsonObject(value: any): any {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed) return value;
+  if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) return value;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+}
+
+function normalizeTrackingInput(req: any) {
+  const rawBody = parseMaybeJsonObject(req.body);
+  const body =
+    typeof rawBody === "string"
+      ? { preview_url: rawBody }
+      : rawBody || {};
+  const query = req.query || {};
+
+  const previewUrlValue = firstDefined(
+    body.preview_url,
+    body.previewUrl,
+    query.preview_url,
+    query.previewUrl,
+  );
+
+  let parsedPreviewUrl: URL | null = null;
+  if (previewUrlValue) {
+    try {
+      parsedPreviewUrl = new URL(String(previewUrlValue));
+    } catch {
+      parsedPreviewUrl = null;
+    }
+  }
+
+  const blogId = firstDefined(
+    body.blog_id,
+    body.blogId,
+    query.blog_id,
+    query.blogId,
+    parsedPreviewUrl?.searchParams.get("blog_id"),
+  );
+
+  const redirectUrl = firstDefined(
+    body.redirect_url,
+    body.redirectUrl,
+    query.redirect_url,
+    query.redirectUrl,
+    parsedPreviewUrl?.searchParams.get("redirect_url"),
+  );
+
+  const host = req.get?.("host") || req.headers?.host;
+  const protocol = req.protocol || "https";
+  const trackingBaseUrl =
+    process.env.LOGSERVER_BASE_URL ||
+    (host ? `${protocol}://${host}` : "https://logger.freeschema.com");
+  const previewUrl =
+    firstDefined(
+      body.preview_url,
+      body.previewUrl,
+      query.preview_url,
+      query.previewUrl,
+    ) ||
+    (blogId && redirectUrl
+      ? `${trackingBaseUrl}/api/preview-visit/track?blog_id=${encodeURIComponent(
+          String(blogId),
+        )}&redirect_url=${encodeURIComponent(String(redirectUrl))}`
+      : undefined) ||
+    req.originalUrl ||
+    req.url;
+
+  return {
+    body,
+    previewUrl,
+    blogId: blogId ? String(blogId) : undefined,
+    redirectUrl: redirectUrl ? String(redirectUrl) : undefined,
+    sessionId: firstDefined(body.session_id, body.sessionId, query.session_id, query.sessionId),
+    entityId: firstDefined(body.entity_id, body.entityId, query.entity_id, query.entityId),
+  };
+}
+
+async function resolveEntityIdFromBlog(
+  blogId: string,
+  timeoutMs = 1200,
+): Promise<string | undefined> {
+  const lookup = GetRelationRaw(Number(blogId), "the_entity_s_blog", 10, 1, true)
+    .then((relationResult: any) => {
+      if (
+        Array.isArray(relationResult) &&
+        relationResult.length > 0 &&
+        relationResult[0]?.id
+      ) {
+        return String(relationResult[0].id);
+      }
+      return undefined;
+    })
+    .catch((relationErr) => {
+      console.warn("Error resolving entity for blog_id", blogId, relationErr);
+      return undefined;
+    });
+
+  const timeout = new Promise<undefined>((resolve) =>
+    setTimeout(() => resolve(undefined), timeoutMs),
+  );
+
+  return Promise.race([lookup, timeout]);
+}
+
 function parseQueryDate(
   value: any,
   bound: "start" | "end",
@@ -82,64 +200,46 @@ function requireAuthenticatedEntityId(req: any, res: any): string | null {
 
 export const trackPreviewVisit = async (req: any, res: any) => {
   try {
-    const { preview_url, session_id, entity_id } = req.body;
+    const { previewUrl, blogId, redirectUrl, sessionId, entityId } =
+      normalizeTrackingInput(req);
 
-    if (!preview_url) {
-      return res.status(400).json({ error: "preview_url is required" });
-    }
-
-    const parsed = new URL(preview_url);
-    const blog_id = parsed.searchParams.get("blog_id");
-    const redirect_url = parsed.searchParams.get("redirect_url");
-
-    if (!blog_id || !redirect_url) {
-      return res
-        .status(400)
-        .json({ error: "blog_id and redirect_url must be in preview_url" });
+    if (!blogId || !redirectUrl) {
+      return res.status(400).json({
+        error:
+          "blog_id and redirect_url are required either directly or inside preview_url",
+      });
     }
 
     // Resolve which entity owns this blog via the relation graph.
     // This is the only reliable way to get entity_id on unauthenticated
     // browser-originated redirect hits (no JWT present).
-    let entityIdFromBlog: string | undefined;
-    try {
-      const relationResult = await GetRelationRaw(
-        Number(blog_id),
-        "the_entity_s_blog",
-        10,
-        1,
-        true,
-      );
-      if (
-        Array.isArray(relationResult) &&
-        relationResult.length > 0 &&
-        relationResult[0]?.id
-      ) {
-        entityIdFromBlog = String(relationResult[0].id);
-      }
-    } catch (relationErr) {
-      // Don't let a relation lookup failure block visit tracking
-      console.error("Error resolving entity for blog_id", blog_id, relationErr);
-    }
+    const entityIdFromBlog = await resolveEntityIdFromBlog(blogId);
 
-    const referrer = req.body.referrer || req.headers["referer"];
+    const referrer = firstDefined(
+      req.body?.referrer,
+      req.body?.referrerUrl,
+      req.query?.referrer,
+      req.query?.referrerUrl,
+      req.headers["referer"],
+      req.headers["referrer"],
+    );
     const referrer_host = parseReferrerHost(referrer);
     const ip_address = getIp(req);
 
     const resolvedEntityId =
       getAuthenticatedEntityId(req) ||
       entityIdFromBlog ||
-      (entity_id ? String(entity_id) : undefined);
+      (entityId ? String(entityId) : undefined);
 
     PreviewVisitService.recordVisit({
-      blog_id,
+      blog_id: blogId,
       entity_id: resolvedEntityId,
-      redirect_url,
-      preview_url,
+      redirect_url: redirectUrl,
+      preview_url: String(previewUrl),
       referrer,
       referrer_host,
       ip_address,
-      session_id: session_id ? Number(session_id) : undefined,
+      session_id: sessionId ? Number(sessionId) : undefined,
     });
 
     res.status(200).json({ message: "Visit recorded" });
