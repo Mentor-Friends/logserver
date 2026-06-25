@@ -150,11 +150,11 @@ export class PreviewVisitService {
       .prepare(
         `
       SELECT redirect_url,
-             COUNT(*) as total_clicks,
+             COUNT(*) as visits,
              COUNT(DISTINCT blog_id) as article_count,
              COUNT(DISTINCT ip_address) as unique_visitors
       FROM preview_visits WHERE 1=1${entityClause}${tf}
-      GROUP BY redirect_url ORDER BY total_clicks DESC LIMIT ?
+      GROUP BY redirect_url ORDER BY visits DESC LIMIT ?
     `,
       )
       .all(params);
@@ -223,14 +223,14 @@ export class PreviewVisitService {
    *
    * Shape:
    * {
-   *   summary: { total_visits, total_clicks, total_unique_visitors,
+   *   summary: { total_visits, total_unique_visitors,
    *              total_articles, total_redirect_urls, first_visit, last_visit },
    *   top_redirect_url: string | null,
-   *   redirect_urls: [ { url, total_visits, total_clicks, unique_visitors,
+   *   redirect_urls: [ { url, visits, unique_visitors,
    *                       articles_linked, first_click, last_click } ],
-   *   referral_urls:  [ { url, visits, clicks, unique_visitors } ],
+   *   referral_urls:  [ { url, visits, unique_visitors } ],
    *   articles: [
-   *     { blog_id, total_visits, total_clicks, unique_visitors,
+   *     { blog_id, visits, unique_visitors,
    *       first_visit, last_visit,
    *       redirect_urls: [...], referral_urls: [...] }
    *   ]
@@ -256,7 +256,6 @@ export class PreviewVisitService {
         `
     SELECT
       COUNT(*)                       AS total_visits,
-      COUNT(*)                       AS total_clicks,
       COUNT(DISTINCT ip_address)     AS total_unique_visitors,
       COUNT(DISTINCT blog_id)        AS total_articles,
       COUNT(DISTINCT redirect_url)   AS total_redirect_urls,
@@ -280,11 +279,11 @@ export class PreviewVisitService {
     const redirect_urls = db
       .prepare(
         `
-    SELECT redirect_url AS url, COUNT(*) AS total_visits, COUNT(*) AS total_clicks,
+    SELECT redirect_url AS url, COUNT(*) AS visits,
            COUNT(DISTINCT ip_address) AS unique_visitors, COUNT(DISTINCT blog_id) AS articles_linked,
            MIN(visited_at) AS first_click, MAX(visited_at) AS last_click
     FROM preview_visits WHERE 1=1${whereExtra}
-    GROUP BY redirect_url ORDER BY total_clicks DESC
+    GROUP BY redirect_url ORDER BY visits DESC
   `,
       )
       .all(params);
@@ -293,7 +292,7 @@ export class PreviewVisitService {
       .prepare(
         `
     SELECT COALESCE(referrer_host, 'Direct / Unknown') AS url, COUNT(*) AS visits,
-           COUNT(*) AS clicks, COUNT(DISTINCT ip_address) AS unique_visitors
+           COUNT(DISTINCT ip_address) AS unique_visitors
     FROM preview_visits WHERE 1=1${whereExtra}
     GROUP BY referrer_host ORDER BY visits DESC
   `,
@@ -325,7 +324,7 @@ export class PreviewVisitService {
       const aHead = db
         .prepare(
           `
-      SELECT COUNT(*) AS total_visits, COUNT(*) AS total_clicks,
+      SELECT COUNT(*) AS visits,
              COUNT(DISTINCT ip_address) AS unique_visitors,
              MIN(visited_at) AS first_visit, MAX(visited_at) AS last_visit
       FROM preview_visits WHERE blog_id = ?${aWhereExtra}
@@ -336,11 +335,11 @@ export class PreviewVisitService {
       const aRedirects = db
         .prepare(
           `
-      SELECT redirect_url AS url, COUNT(*) AS total_visits, COUNT(*) AS total_clicks,
+      SELECT redirect_url AS url, COUNT(*) AS visits,
              COUNT(DISTINCT ip_address) AS unique_visitors,
              MIN(visited_at) AS first_click, MAX(visited_at) AS last_click
       FROM preview_visits WHERE blog_id = ?${aWhereExtra}
-      GROUP BY redirect_url ORDER BY total_clicks DESC
+      GROUP BY redirect_url ORDER BY visits DESC
     `,
         )
         .all(aParams);
@@ -349,7 +348,7 @@ export class PreviewVisitService {
         .prepare(
           `
       SELECT COALESCE(referrer_host, 'Direct / Unknown') AS url, COUNT(*) AS visits,
-             COUNT(*) AS clicks, COUNT(DISTINCT ip_address) AS unique_visitors
+             COUNT(DISTINCT ip_address) AS unique_visitors
       FROM preview_visits WHERE blog_id = ?${aWhereExtra}
       GROUP BY referrer_host ORDER BY visits DESC
     `,
@@ -378,7 +377,7 @@ export class PreviewVisitService {
    * Returns all details for a single blog_id:
    * {
    *   blog_id,
-   *   summary: { total_visits, total_clicks, unique_visitors, first_visit, last_visit },
+   *   summary: { visits, unique_visitors, first_visit, last_visit },
    *   top_redirect_url: string | null,
    *   redirect_urls: [...],
    *   referral_urls: [...],
@@ -403,8 +402,7 @@ export class PreviewVisitService {
       .prepare(
         `
       SELECT
-        COUNT(*)                       AS total_visits,
-        COUNT(*)                       AS total_clicks,
+        COUNT(*)                       AS visits,
         COUNT(DISTINCT ip_address)     AS unique_visitors,
         MIN(visited_at)                AS first_visit,
         MAX(visited_at)                AS last_visit
@@ -430,14 +428,13 @@ export class PreviewVisitService {
         `
       SELECT
         redirect_url                   AS url,
-        COUNT(*)                       AS total_visits,
-        COUNT(*)                       AS total_clicks,
+        COUNT(*)                       AS visits,
         COUNT(DISTINCT ip_address)     AS unique_visitors,
         MIN(visited_at)                AS first_click,
         MAX(visited_at)                AS last_click
       FROM preview_visits WHERE blog_id = ?${entityClause}${tf}
       GROUP BY redirect_url
-      ORDER BY total_clicks DESC
+      ORDER BY visits DESC
     `,
       )
       .all(base);
@@ -448,7 +445,6 @@ export class PreviewVisitService {
       SELECT
         COALESCE(referrer_host, 'Direct / Unknown') AS url,
         COUNT(*)                                    AS visits,
-        COUNT(*)                                    AS clicks,
         COUNT(DISTINCT ip_address)                  AS unique_visitors
       FROM preview_visits WHERE blog_id = ?${entityClause}${tf}
       GROUP BY referrer_host
