@@ -6,7 +6,10 @@ export class PreviewVisitService {
   private static db: any = null;
 
   private static dailyVisitExpr = `strftime('%Y-%m-%d', visited_at / 1000, 'unixepoch', 'localtime')`;
-  private static geoCache = new Map<string, { country?: string; city?: string }>();
+  private static geoCache = new Map<
+    string,
+    { country?: string; city?: string }
+  >();
 
   private static getDb() {
     if (this.db) return this.db;
@@ -50,7 +53,9 @@ export class PreviewVisitService {
       `);
     }
 
-    const hasCountry = columns.some((column: any) => column?.name === "country");
+    const hasCountry = columns.some(
+      (column: any) => column?.name === "country",
+    );
     if (!hasCountry) {
       this.db.exec(`
         ALTER TABLE preview_visits ADD COLUMN country TEXT;
@@ -142,10 +147,7 @@ export class PreviewVisitService {
         `https://ipapi.co/${encodeURIComponent(ip)}/json/`,
         { signal: controller.signal },
       );
-      if (!res.ok) {
-        this.geoCache.set(ip, {});
-        return {};
-      }
+      if (!res.ok) return {};
 
       const data: any = await res.json().catch(() => ({}));
       const location = {
@@ -156,7 +158,6 @@ export class PreviewVisitService {
       this.geoCache.set(ip, location);
       return location;
     } catch {
-      this.geoCache.set(ip, {});
       return {};
     } finally {
       clearTimeout(timeout);
@@ -166,7 +167,12 @@ export class PreviewVisitService {
   private static getLocationBreakdown(
     params: any[],
     whereExtra: string,
-  ): { country: string; city: string; visits: number; unique_visitors: number }[] {
+  ): {
+    country: string;
+    city: string;
+    visits: number;
+    unique_visitors: number;
+  }[] {
     const db = this.getDb();
     return db
       .prepare(
