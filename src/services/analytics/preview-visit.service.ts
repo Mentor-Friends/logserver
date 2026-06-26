@@ -5,6 +5,9 @@ import fs from "fs";
 export class PreviewVisitService {
   private static db: any = null;
 
+  private static dailyVisitExpr = `strftime('%Y-%m-%d', visited_at / 1000, 'unixepoch', 'localtime')`;
+  private static geoCache = new Map<string, { country?: string; city?: string }>();
+
   private static getDb() {
     if (this.db) return this.db;
 
@@ -28,6 +31,8 @@ export class PreviewVisitService {
         referrer      TEXT,
         referrer_host TEXT,
         ip_address    TEXT,
+        country       TEXT,
+        city          TEXT,
         session_id    INTEGER,
         visited_at    INTEGER NOT NULL,
         entity_id     TEXT
@@ -45,11 +50,27 @@ export class PreviewVisitService {
       `);
     }
 
+    const hasCountry = columns.some((column: any) => column?.name === "country");
+    if (!hasCountry) {
+      this.db.exec(`
+        ALTER TABLE preview_visits ADD COLUMN country TEXT;
+      `);
+    }
+
+    const hasCity = columns.some((column: any) => column?.name === "city");
+    if (!hasCity) {
+      this.db.exec(`
+        ALTER TABLE preview_visits ADD COLUMN city TEXT;
+      `);
+    }
+
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_pv_blog_id ON preview_visits(blog_id);
       CREATE INDEX IF NOT EXISTS idx_pv_entity_id ON preview_visits(entity_id);
       CREATE INDEX IF NOT EXISTS idx_pv_redirect_url ON preview_visits(redirect_url);
       CREATE INDEX IF NOT EXISTS idx_pv_referrer_host ON preview_visits(referrer_host);
+      CREATE INDEX IF NOT EXISTS idx_pv_country ON preview_visits(country);
+      CREATE INDEX IF NOT EXISTS idx_pv_city ON preview_visits(city);
       CREATE INDEX IF NOT EXISTS idx_pv_visited_at ON preview_visits(visited_at);
     `);
   }
@@ -70,6 +91,100 @@ export class PreviewVisitService {
     return sql;
   }
 
+  private static getDailyVisits(
+    params: any[],
+    whereExtra: string,
+  ): { date: string; visits: number; unique_visitors: number }[] {
+    const db = this.getDb();
+    return db
+      .prepare(
+        `
+      SELECT ${this.dailyVisitExpr} AS date,
+             COUNT(*) AS visits,
+             COUNT(DISTINCT ip_address) AS unique_visitors
+      FROM preview_visits
+      WHERE 1=1${whereExtra}
+      GROUP BY ${this.dailyVisitExpr}
+      ORDER BY date
+    `,
+      )
+      .all(params);
+  }
+
+  public static async resolveLocation(ipAddress?: string): Promise<{
+    country?: string;
+    city?: string;
+  }> {
+    const ip = String(ipAddress || "").trim();
+    if (!ip || ip === "unknown") return {};
+
+    if (
+      ip === "127.0.0.1" ||
+      ip === "::1" ||
+      ip.startsWith("10.") ||
+      ip.startsWith("192.168.") ||
+      ip.startsWith("169.254.") ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(ip) ||
+      ip.startsWith("fc") ||
+      ip.startsWith("fd")
+    ) {
+      return {};
+    }
+
+    const cached = this.geoCache.get(ip);
+    if (cached) return cached;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 900);
+
+    try {
+      const res = await fetch(
+        `https://ipapi.co/${encodeURIComponent(ip)}/json/`,
+        { signal: controller.signal },
+      );
+      if (!res.ok) {
+        this.geoCache.set(ip, {});
+        return {};
+      }
+
+      const data: any = await res.json().catch(() => ({}));
+      const location = {
+        country:
+          String(data?.country_name || data?.country || "").trim() || undefined,
+        city: String(data?.city || "").trim() || undefined,
+      };
+      this.geoCache.set(ip, location);
+      return location;
+    } catch {
+      this.geoCache.set(ip, {});
+      return {};
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private static getLocationBreakdown(
+    params: any[],
+    whereExtra: string,
+  ): { country: string; city: string; visits: number; unique_visitors: number }[] {
+    const db = this.getDb();
+    return db
+      .prepare(
+        `
+      SELECT
+        COALESCE(country, 'Unknown') AS country,
+        COALESCE(city, 'Unknown') AS city,
+        COUNT(*) AS visits,
+        COUNT(DISTINCT ip_address) AS unique_visitors
+      FROM preview_visits
+      WHERE 1=1${whereExtra}
+      GROUP BY country, city
+      ORDER BY visits DESC
+    `,
+      )
+      .all(params);
+  }
+
   // ─── record ─────────────────────────────────────────────────────────────────
 
   public static recordVisit(data: {
@@ -80,14 +195,16 @@ export class PreviewVisitService {
     referrer?: string;
     referrer_host?: string;
     ip_address?: string;
+    country?: string;
+    city?: string;
     session_id?: number;
   }) {
     const db = this.getDb();
     db.prepare(
       `
     INSERT INTO preview_visits
-      (blog_id, entity_id, redirect_url, preview_url, referrer, referrer_host, ip_address, session_id, visited_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (blog_id, entity_id, redirect_url, preview_url, referrer, referrer_host, ip_address, country, city, session_id, visited_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
     ).run(
       data.blog_id,
@@ -97,6 +214,8 @@ export class PreviewVisitService {
       data.referrer || null,
       data.referrer_host || null,
       data.ip_address || null,
+      data.country || null,
+      data.city || null,
       data.session_id || null,
       Date.now(),
     );
@@ -299,6 +418,9 @@ export class PreviewVisitService {
       )
       .all(params);
 
+    const daily_visits = this.getDailyVisits(params, whereExtra);
+    const locations = this.getLocationBreakdown(params, whereExtra);
+
     // ⚠️ articleIds query must use a fresh params array since the per-article
     // queries below build their own param lists from scratch
     const articleIds: { blog_id: string }[] = db
@@ -355,9 +477,23 @@ export class PreviewVisitService {
         )
         .all(aParams);
 
+      const aDailyVisits = db
+        .prepare(
+          `
+      SELECT ${this.dailyVisitExpr} AS date,
+             COUNT(*) AS visits,
+             COUNT(DISTINCT ip_address) AS unique_visitors
+      FROM preview_visits WHERE blog_id = ?${aWhereExtra}
+      GROUP BY ${this.dailyVisitExpr}
+      ORDER BY date
+    `,
+        )
+        .all(aParams);
+
       return {
         blog_id,
         ...aHead,
+        daily_visits: aDailyVisits,
         redirect_urls: aRedirects,
         referral_urls: aReferrals,
       };
@@ -366,6 +502,8 @@ export class PreviewVisitService {
     return {
       summary,
       top_redirect_url: topRow?.redirect_url ?? null,
+      daily_visits,
+      locations,
       redirect_urls,
       referral_urls,
       articles,
@@ -453,6 +591,22 @@ export class PreviewVisitService {
       )
       .all(base);
 
+    const daily_visits = db
+      .prepare(
+        `
+      SELECT ${this.dailyVisitExpr} AS date,
+             COUNT(*) AS visits,
+             COUNT(DISTINCT ip_address) AS unique_visitors
+      FROM preview_visits
+      WHERE blog_id = ?${entityClause}${tf}
+      GROUP BY ${this.dailyVisitExpr}
+      ORDER BY date
+    `,
+      )
+      .all(base);
+
+    const locations = this.getLocationBreakdown(base, entityClause + tf);
+
     const visitor_ips = db
       .prepare(
         `
@@ -474,6 +628,8 @@ export class PreviewVisitService {
       blog_id,
       summary,
       top_redirect_url: topRow?.redirect_url ?? null,
+      daily_visits,
+      locations,
       redirect_urls,
       referral_urls,
       visitor_ips,

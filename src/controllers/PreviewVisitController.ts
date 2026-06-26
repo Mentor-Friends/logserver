@@ -44,9 +44,7 @@ function parseMaybeJsonObject(value: any): any {
 function normalizeTrackingInput(req: any) {
   const rawBody = parseMaybeJsonObject(req.body);
   const body =
-    typeof rawBody === "string"
-      ? { preview_url: rawBody }
-      : rawBody || {};
+    typeof rawBody === "string" ? { preview_url: rawBody } : rawBody || {};
   const query = req.query || {};
 
   const previewUrlValue = firstDefined(
@@ -106,8 +104,18 @@ function normalizeTrackingInput(req: any) {
     previewUrl,
     blogId: blogId ? String(blogId) : undefined,
     redirectUrl: redirectUrl ? String(redirectUrl) : undefined,
-    sessionId: firstDefined(body.session_id, body.sessionId, query.session_id, query.sessionId),
-    entityId: firstDefined(body.entity_id, body.entityId, query.entity_id, query.entityId),
+    sessionId: firstDefined(
+      body.session_id,
+      body.sessionId,
+      query.session_id,
+      query.sessionId,
+    ),
+    entityId: firstDefined(
+      body.entity_id,
+      body.entityId,
+      query.entity_id,
+      query.entityId,
+    ),
   };
 }
 
@@ -115,7 +123,13 @@ async function resolveEntityIdFromBlog(
   blogId: string,
   timeoutMs = 1200,
 ): Promise<string | undefined> {
-  const lookup = GetRelationRaw(Number(blogId), "the_entity_s_blog", 10, 1, true)
+  const lookup = GetRelationRaw(
+    Number(blogId),
+    "the_entity_s_blog",
+    10,
+    1,
+    true,
+  )
     .then((relationResult: any) => {
       if (
         Array.isArray(relationResult) &&
@@ -210,11 +224,6 @@ export const trackPreviewVisit = async (req: any, res: any) => {
       });
     }
 
-    // Resolve which entity owns this blog via the relation graph.
-    // This is the only reliable way to get entity_id on unauthenticated
-    // browser-originated redirect hits (no JWT present).
-    const entityIdFromBlog = await resolveEntityIdFromBlog(blogId);
-
     const referrer = firstDefined(
       req.body?.referrer,
       req.body?.referrerUrl,
@@ -225,6 +234,17 @@ export const trackPreviewVisit = async (req: any, res: any) => {
     );
     const referrer_host = parseReferrerHost(referrer);
     const ip_address = getIp(req);
+
+    // Resolve which entity owns this blog (via the relation graph) and the
+    // visitor's geo location in parallel. Both are independent, best-effort
+    // lookups against external services with their own timeouts — running
+    // them sequentially could stack up to ~2.1s, which eats into the 3.5s
+    // budget the caller (trackArticleVisit) allows for the whole request.
+    // Running them concurrently caps the wait at whichever is slower.
+    const [entityIdFromBlog, location] = await Promise.all([
+      resolveEntityIdFromBlog(blogId),
+      PreviewVisitService.resolveLocation(ip_address),
+    ]);
 
     const resolvedEntityId =
       getAuthenticatedEntityId(req) ||
@@ -239,6 +259,8 @@ export const trackPreviewVisit = async (req: any, res: any) => {
       referrer,
       referrer_host,
       ip_address,
+      country: location.country,
+      city: location.city,
       session_id: sessionId ? Number(sessionId) : undefined,
     });
 
