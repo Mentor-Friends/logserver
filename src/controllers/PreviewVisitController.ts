@@ -29,6 +29,13 @@ function firstDefined(...values: any[]) {
   return undefined;
 }
 
+function parseMaybeNumber(value: any): number | undefined {
+  const raw = firstDefined(value);
+  if (raw === undefined) return undefined;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 function parseMaybeJsonObject(value: any): any {
   if (typeof value !== "string") return value;
   const trimmed = value.trim();
@@ -104,6 +111,23 @@ function normalizeTrackingInput(req: any) {
     previewUrl,
     blogId: blogId ? String(blogId) : undefined,
     redirectUrl: redirectUrl ? String(redirectUrl) : undefined,
+    ipAddress: firstDefined(
+      body.ip_address,
+      body.ipAddress,
+      query.ip_address,
+      query.ipAddress,
+    ),
+    country: firstDefined(body.country, query.country),
+    city: firstDefined(body.city, query.city),
+    latitude: parseMaybeNumber(firstDefined(body.latitude, query.latitude)),
+    longitude: parseMaybeNumber(firstDefined(body.longitude, query.longitude)),
+    accuracy: parseMaybeNumber(firstDefined(body.accuracy, query.accuracy)),
+    locationSource: firstDefined(
+      body.location_source,
+      body.locationSource,
+      query.location_source,
+      query.locationSource,
+    ),
     sessionId: firstDefined(
       body.session_id,
       body.sessionId,
@@ -210,12 +234,29 @@ function requireAuthenticatedEntityId(req: any, res: any): string | null {
   return entityId;
 }
 
+type VisitLocation = {
+  country?: string;
+  city?: string;
+};
+
 // ─── POST /api/preview-visit/track ──────────────────────────────────────────
 
 export const trackPreviewVisit = async (req: any, res: any) => {
   try {
-    const { previewUrl, blogId, redirectUrl, sessionId, entityId } =
-      normalizeTrackingInput(req);
+    const {
+      previewUrl,
+      blogId,
+      redirectUrl,
+      sessionId,
+      entityId,
+      ipAddress: providedIpAddress,
+      country: providedCountry,
+      city: providedCity,
+      latitude,
+      longitude,
+      accuracy,
+      locationSource,
+    } = normalizeTrackingInput(req);
 
     if (!blogId || !redirectUrl) {
       return res.status(400).json({
@@ -233,7 +274,8 @@ export const trackPreviewVisit = async (req: any, res: any) => {
       req.headers["referrer"],
     );
     const referrer_host = parseReferrerHost(referrer);
-    const ip_address = getIp(req);
+    const ip_address = String(providedIpAddress || getIp(req));
+    const hasBrowserGeo = latitude !== undefined && longitude !== undefined;
 
     // Resolve which entity owns this blog (via the relation graph) and the
     // visitor's geo location in parallel. Both are independent, best-effort
@@ -241,10 +283,28 @@ export const trackPreviewVisit = async (req: any, res: any) => {
     // them sequentially could stack up to ~2.1s, which eats into the 3.5s
     // budget the caller (trackArticleVisit) allows for the whole request.
     // Running them concurrently caps the wait at whichever is slower.
-    const [entityIdFromBlog, location] = await Promise.all([
-      resolveEntityIdFromBlog(blogId),
-      PreviewVisitService.resolveLocation(ip_address),
+    const entityIdPromise: Promise<string | undefined> =
+      resolveEntityIdFromBlog(blogId);
+    const locationPromise: Promise<VisitLocation> = hasBrowserGeo
+      ? PreviewVisitService.resolveLocationFromCoordinates(latitude, longitude)
+      : PreviewVisitService.resolveLocation(ip_address);
+    const [entityIdFromBlog, resolvedLocation] = await Promise.all([
+      entityIdPromise,
+      locationPromise,
     ]);
+
+    const location: VisitLocation = hasBrowserGeo
+      ? {
+          country:
+            providedCountry ||
+            resolvedLocation.country ||
+            "Unknown",
+          city:
+            providedCity ||
+            resolvedLocation.city ||
+            "Unknown",
+        }
+      : resolvedLocation;
 
     const resolvedEntityId =
       getAuthenticatedEntityId(req) ||
@@ -261,6 +321,11 @@ export const trackPreviewVisit = async (req: any, res: any) => {
       ip_address,
       country: location.country,
       city: location.city,
+      latitude,
+      longitude,
+      accuracy,
+      location_source:
+        locationSource || (hasBrowserGeo ? "browser_geolocation" : "ip_lookup"),
       session_id: sessionId ? Number(sessionId) : undefined,
     });
 

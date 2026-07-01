@@ -10,6 +10,10 @@ export class PreviewVisitService {
     string,
     { country?: string; city?: string }
   >();
+  private static reverseGeoCache = new Map<
+    string,
+    { country?: string; city?: string }
+  >();
 
   private static getDb() {
     if (this.db) return this.db;
@@ -36,6 +40,10 @@ export class PreviewVisitService {
         ip_address    TEXT,
         country       TEXT,
         city          TEXT,
+        latitude      REAL,
+        longitude     REAL,
+        accuracy      REAL,
+        location_source TEXT,
         session_id    INTEGER,
         visited_at    INTEGER NOT NULL,
         entity_id     TEXT
@@ -66,6 +74,40 @@ export class PreviewVisitService {
     if (!hasCity) {
       this.db.exec(`
         ALTER TABLE preview_visits ADD COLUMN city TEXT;
+      `);
+    }
+
+    const hasLatitude = columns.some(
+      (column: any) => column?.name === "latitude",
+    );
+    if (!hasLatitude) {
+      this.db.exec(`
+        ALTER TABLE preview_visits ADD COLUMN latitude REAL;
+      `);
+    }
+
+    const hasLongitude = columns.some(
+      (column: any) => column?.name === "longitude",
+    );
+    if (!hasLongitude) {
+      this.db.exec(`
+        ALTER TABLE preview_visits ADD COLUMN longitude REAL;
+      `);
+    }
+
+    const hasAccuracy = columns.some((column: any) => column?.name === "accuracy");
+    if (!hasAccuracy) {
+      this.db.exec(`
+        ALTER TABLE preview_visits ADD COLUMN accuracy REAL;
+      `);
+    }
+
+    const hasLocationSource = columns.some(
+      (column: any) => column?.name === "location_source",
+    );
+    if (!hasLocationSource) {
+      this.db.exec(`
+        ALTER TABLE preview_visits ADD COLUMN location_source TEXT;
       `);
     }
 
@@ -164,6 +206,65 @@ export class PreviewVisitService {
     }
   }
 
+  public static async resolveLocationFromCoordinates(
+    latitude?: number,
+    longitude?: number,
+  ): Promise<{ country?: string; city?: string }> {
+    const lat = Number(latitude);
+    const lon = Number(longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return {};
+
+    const cacheKey = `${lat.toFixed(5)},${lon.toFixed(5)}`;
+    const cached = this.reverseGeoCache.get(cacheKey);
+    if (cached) return cached;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1200);
+
+    try {
+      const url = new URL("https://nominatim.openstreetmap.org/reverse");
+      url.searchParams.set("format", "jsonv2");
+      url.searchParams.set("lat", String(lat));
+      url.searchParams.set("lon", String(lon));
+      url.searchParams.set("addressdetails", "1");
+      url.searchParams.set("zoom", "10");
+
+      const res = await fetch(url.toString(), {
+        signal: controller.signal,
+        headers: {
+          "User-Agent":
+            process.env.NOMINATIM_USER_AGENT ||
+            "logserver/1.0 (article analytics)",
+          "Accept-Language": "en",
+          Accept: "application/json",
+        },
+      });
+
+      if (!res.ok) return {};
+
+      const data: any = await res.json().catch(() => ({}));
+      const address = data?.address || {};
+      const city =
+        String(
+          address.city ||
+            address.town ||
+            address.village ||
+            address.hamlet ||
+            address.suburb ||
+            address.county ||
+            "",
+        ).trim() || undefined;
+      const country = String(address.country || "").trim() || undefined;
+      const location = { country, city };
+      this.reverseGeoCache.set(cacheKey, location);
+      return location;
+    } catch {
+      return {};
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   private static getLocationBreakdown(
     params: any[],
     whereExtra: string,
@@ -203,14 +304,18 @@ export class PreviewVisitService {
     ip_address?: string;
     country?: string;
     city?: string;
+    latitude?: number;
+    longitude?: number;
+    accuracy?: number;
+    location_source?: string;
     session_id?: number;
   }) {
     const db = this.getDb();
     db.prepare(
       `
     INSERT INTO preview_visits
-      (blog_id, entity_id, redirect_url, preview_url, referrer, referrer_host, ip_address, country, city, session_id, visited_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (blog_id, entity_id, redirect_url, preview_url, referrer, referrer_host, ip_address, country, city, latitude, longitude, accuracy, location_source, session_id, visited_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `,
     ).run(
       data.blog_id,
@@ -222,6 +327,10 @@ export class PreviewVisitService {
       data.ip_address || null,
       data.country || null,
       data.city || null,
+      data.latitude ?? null,
+      data.longitude ?? null,
+      data.accuracy ?? null,
+      data.location_source || null,
       data.session_id || null,
       Date.now(),
     );
