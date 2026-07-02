@@ -36,7 +36,11 @@ router.post("/analytics/page", getPageAnalytics);
 router.post("/analytics/routes-table", getRouteAnalyticsTable);
 
 // Preview-visit routes
-router.post("/preview-visit/track", trackPreviewVisit);
+router.post(
+  "/preview-visit/track",
+  express.text({ type: ["text/plain", "text/*"] }),
+  trackPreviewVisit,
+);
 router.get("/preview-visit/track", trackPreviewVisit);
 
 //comprehensive analytics across ALL articles
