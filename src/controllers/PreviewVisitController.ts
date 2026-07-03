@@ -295,14 +295,8 @@ export const trackPreviewVisit = async (req: any, res: any) => {
 
     const location: VisitLocation = hasBrowserGeo
       ? {
-          country:
-            providedCountry ||
-            resolvedLocation.country ||
-            "Unknown",
-          city:
-            providedCity ||
-            resolvedLocation.city ||
-            "Unknown",
+          country: providedCountry || resolvedLocation.country || "Unknown",
+          city: providedCity || resolvedLocation.city || "Unknown",
         }
       : resolvedLocation;
 
