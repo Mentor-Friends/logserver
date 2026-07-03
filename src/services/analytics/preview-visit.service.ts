@@ -95,7 +95,9 @@ export class PreviewVisitService {
       `);
     }
 
-    const hasAccuracy = columns.some((column: any) => column?.name === "accuracy");
+    const hasAccuracy = columns.some(
+      (column: any) => column?.name === "accuracy",
+    );
     if (!hasAccuracy) {
       this.db.exec(`
         ALTER TABLE preview_visits ADD COLUMN accuracy REAL;
@@ -720,7 +722,10 @@ export class PreviewVisitService {
       )
       .all(base);
 
-    const locations = this.getLocationBreakdown(base, entityClause + tf);
+    const locations = this.getLocationBreakdown(
+      base,
+      " AND blog_id = ?" + entityClause + tf,
+    );
 
     const visitor_ips = db
       .prepare(
