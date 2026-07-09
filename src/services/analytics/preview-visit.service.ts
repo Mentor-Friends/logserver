@@ -6,6 +6,7 @@ export class PreviewVisitService {
   private static db: any = null;
 
   private static dailyVisitExpr = `strftime('%Y-%m-%d', visited_at / 1000, 'unixepoch', 'localtime')`;
+  private static uniqueVisitorExpr = `COALESCE(NULLIF(visitor_id, ''), NULLIF(session_id, 999), ip_address, 'unknown')`;
   private static geoCache = new Map<
     string,
     { country?: string; city?: string }
@@ -38,6 +39,7 @@ export class PreviewVisitService {
         referrer      TEXT,
         referrer_host TEXT,
         ip_address    TEXT,
+        visitor_id    TEXT,
         country       TEXT,
         city          TEXT,
         latitude      REAL,
@@ -52,6 +54,15 @@ export class PreviewVisitService {
 
     // Keep older databases compatible after the entity_id filter was added.
     const columns = this.db.prepare(`PRAGMA table_info(preview_visits)`).all();
+    const hasVisitorId = columns.some(
+      (column: any) => column?.name === "visitor_id",
+    );
+    if (!hasVisitorId) {
+      this.db.exec(`
+        ALTER TABLE preview_visits ADD COLUMN visitor_id TEXT;
+      `);
+    }
+
     const hasEntityId = columns.some(
       (column: any) => column?.name === "entity_id",
     );
@@ -116,6 +127,7 @@ export class PreviewVisitService {
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_pv_blog_id ON preview_visits(blog_id);
       CREATE INDEX IF NOT EXISTS idx_pv_entity_id ON preview_visits(entity_id);
+      CREATE INDEX IF NOT EXISTS idx_pv_visitor_id ON preview_visits(visitor_id);
       CREATE INDEX IF NOT EXISTS idx_pv_redirect_url ON preview_visits(redirect_url);
       CREATE INDEX IF NOT EXISTS idx_pv_referrer_host ON preview_visits(referrer_host);
       CREATE INDEX IF NOT EXISTS idx_pv_country ON preview_visits(country);
@@ -150,7 +162,7 @@ export class PreviewVisitService {
         `
       SELECT ${this.dailyVisitExpr} AS date,
              COUNT(*) AS visits,
-             COUNT(DISTINCT ip_address) AS unique_visitors
+             COUNT(DISTINCT ${this.uniqueVisitorExpr}) AS unique_visitors
       FROM preview_visits
       WHERE 1=1${whereExtra}
       GROUP BY ${this.dailyVisitExpr}
@@ -284,7 +296,7 @@ export class PreviewVisitService {
         COALESCE(country, 'Unknown') AS country,
         COALESCE(city, 'Unknown') AS city,
         COUNT(*) AS visits,
-        COUNT(DISTINCT ip_address) AS unique_visitors
+        COUNT(DISTINCT ${this.uniqueVisitorExpr}) AS unique_visitors
       FROM preview_visits
       WHERE 1=1${whereExtra}
       GROUP BY country, city
@@ -296,7 +308,7 @@ export class PreviewVisitService {
 
   // ─── record ─────────────────────────────────────────────────────────────────
 
-  public static recordVisit(data: {
+  public static async recordVisit(data: {
     blog_id: string;
     entity_id?: string;
     redirect_url: string;
@@ -304,6 +316,7 @@ export class PreviewVisitService {
     referrer?: string;
     referrer_host?: string;
     ip_address?: string;
+    visitor_id?: string;
     country?: string;
     city?: string;
     latitude?: number;
@@ -312,30 +325,38 @@ export class PreviewVisitService {
     location_source?: string;
     session_id?: number;
   }) {
-    const db = this.getDb();
-    db.prepare(
-      `
-    INSERT INTO preview_visits
-      (blog_id, entity_id, redirect_url, preview_url, referrer, referrer_host, ip_address, country, city, latitude, longitude, accuracy, location_source, session_id, visited_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `,
-    ).run(
-      data.blog_id,
-      data.entity_id || null,
-      data.redirect_url,
-      data.preview_url,
-      data.referrer || null,
-      data.referrer_host || null,
-      data.ip_address || null,
-      data.country || null,
-      data.city || null,
-      data.latitude ?? null,
-      data.longitude ?? null,
-      data.accuracy ?? null,
-      data.location_source || null,
-      data.session_id || null,
-      Date.now(),
-    );
+    return new Promise<void>((resolve, reject) => {
+      try {
+        const db = this.getDb();
+        db.prepare(
+          `
+        INSERT INTO preview_visits
+          (blog_id, entity_id, redirect_url, preview_url, referrer, referrer_host, ip_address, visitor_id, country, city, latitude, longitude, accuracy, location_source, session_id, visited_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+        ).run(
+          data.blog_id,
+          data.entity_id || null,
+          data.redirect_url,
+          data.preview_url,
+          data.referrer || null,
+          data.referrer_host || null,
+          data.ip_address || null,
+          data.visitor_id || null,
+          data.country || null,
+          data.city || null,
+          data.latitude ?? null,
+          data.longitude ?? null,
+          data.accuracy ?? null,
+          data.location_source || null,
+          data.session_id || null,
+          Date.now(),
+        );
+        resolve();
+      } catch (err) {
+        reject(err);
+      }
+    });
   }
   // ─── existing helpers (kept for backwards-compat) ───────────────────────────
 
@@ -356,7 +377,7 @@ export class PreviewVisitService {
       .prepare(
         `
       SELECT COUNT(*) as total_visits,
-             COUNT(DISTINCT ip_address) as unique_visitors,
+             COUNT(DISTINCT ${this.uniqueVisitorExpr}) as unique_visitors,
              MIN(visited_at) as first_visit,
              MAX(visited_at) as last_visit,
              redirect_url
@@ -388,7 +409,7 @@ export class PreviewVisitService {
       SELECT redirect_url,
              COUNT(*) as visits,
              COUNT(DISTINCT blog_id) as article_count,
-             COUNT(DISTINCT ip_address) as unique_visitors
+             COUNT(DISTINCT ${this.uniqueVisitorExpr}) as unique_visitors
       FROM preview_visits WHERE 1=1${entityClause}${tf}
       GROUP BY redirect_url ORDER BY visits DESC LIMIT ?
     `,
@@ -407,7 +428,7 @@ export class PreviewVisitService {
     let sql = `
       SELECT COALESCE(referrer_host, 'Direct / Unknown') as platform,
              COUNT(*) as visits,
-             COUNT(DISTINCT ip_address) as unique_visitors
+             COUNT(DISTINCT ${this.uniqueVisitorExpr}) as unique_visitors
       FROM preview_visits WHERE 1=1`;
     if (blog_id) {
       sql += " AND blog_id = ?";
@@ -492,7 +513,7 @@ export class PreviewVisitService {
         `
     SELECT
       COUNT(*)                       AS total_visits,
-      COUNT(DISTINCT ip_address)     AS total_unique_visitors,
+      COUNT(DISTINCT ${this.uniqueVisitorExpr}) AS total_unique_visitors,
       COUNT(DISTINCT blog_id)        AS total_articles,
       COUNT(DISTINCT redirect_url)   AS total_redirect_urls,
       MIN(visited_at)                AS first_visit,
@@ -516,7 +537,7 @@ export class PreviewVisitService {
       .prepare(
         `
     SELECT redirect_url AS url, COUNT(*) AS visits,
-           COUNT(DISTINCT ip_address) AS unique_visitors, COUNT(DISTINCT blog_id) AS articles_linked,
+           COUNT(DISTINCT ${this.uniqueVisitorExpr}) AS unique_visitors, COUNT(DISTINCT blog_id) AS articles_linked,
            MIN(visited_at) AS first_click, MAX(visited_at) AS last_click
     FROM preview_visits WHERE 1=1${whereExtra}
     GROUP BY redirect_url ORDER BY visits DESC
@@ -528,7 +549,7 @@ export class PreviewVisitService {
       .prepare(
         `
     SELECT COALESCE(referrer_host, 'Direct / Unknown') AS url, COUNT(*) AS visits,
-           COUNT(DISTINCT ip_address) AS unique_visitors
+           COUNT(DISTINCT ${this.uniqueVisitorExpr}) AS unique_visitors
     FROM preview_visits WHERE 1=1${whereExtra}
     GROUP BY referrer_host ORDER BY visits DESC
   `,
@@ -564,7 +585,7 @@ export class PreviewVisitService {
         .prepare(
           `
       SELECT COUNT(*) AS visits,
-             COUNT(DISTINCT ip_address) AS unique_visitors,
+             COUNT(DISTINCT ${this.uniqueVisitorExpr}) AS unique_visitors,
              MIN(visited_at) AS first_visit, MAX(visited_at) AS last_visit
       FROM preview_visits WHERE blog_id = ?${aWhereExtra}
     `,
@@ -575,7 +596,7 @@ export class PreviewVisitService {
         .prepare(
           `
       SELECT redirect_url AS url, COUNT(*) AS visits,
-             COUNT(DISTINCT ip_address) AS unique_visitors,
+             COUNT(DISTINCT ${this.uniqueVisitorExpr}) AS unique_visitors,
              MIN(visited_at) AS first_click, MAX(visited_at) AS last_click
       FROM preview_visits WHERE blog_id = ?${aWhereExtra}
       GROUP BY redirect_url ORDER BY visits DESC
@@ -587,7 +608,7 @@ export class PreviewVisitService {
         .prepare(
           `
       SELECT COALESCE(referrer_host, 'Direct / Unknown') AS url, COUNT(*) AS visits,
-             COUNT(DISTINCT ip_address) AS unique_visitors
+             COUNT(DISTINCT ${this.uniqueVisitorExpr}) AS unique_visitors
       FROM preview_visits WHERE blog_id = ?${aWhereExtra}
       GROUP BY referrer_host ORDER BY visits DESC
     `,
@@ -599,7 +620,7 @@ export class PreviewVisitService {
           `
       SELECT ${this.dailyVisitExpr} AS date,
              COUNT(*) AS visits,
-             COUNT(DISTINCT ip_address) AS unique_visitors
+             COUNT(DISTINCT ${this.uniqueVisitorExpr}) AS unique_visitors
       FROM preview_visits WHERE blog_id = ?${aWhereExtra}
       GROUP BY ${this.dailyVisitExpr}
       ORDER BY date
@@ -658,7 +679,7 @@ export class PreviewVisitService {
         `
       SELECT
         COUNT(*)                       AS visits,
-        COUNT(DISTINCT ip_address)     AS unique_visitors,
+        COUNT(DISTINCT ${this.uniqueVisitorExpr}) AS unique_visitors,
         MIN(visited_at)                AS first_visit,
         MAX(visited_at)                AS last_visit
       FROM preview_visits WHERE blog_id = ?${entityClause}${tf}
@@ -684,7 +705,7 @@ export class PreviewVisitService {
       SELECT
         redirect_url                   AS url,
         COUNT(*)                       AS visits,
-        COUNT(DISTINCT ip_address)     AS unique_visitors,
+        COUNT(DISTINCT ${this.uniqueVisitorExpr}) AS unique_visitors,
         MIN(visited_at)                AS first_click,
         MAX(visited_at)                AS last_click
       FROM preview_visits WHERE blog_id = ?${entityClause}${tf}
@@ -700,7 +721,7 @@ export class PreviewVisitService {
       SELECT
         COALESCE(referrer_host, 'Direct / Unknown') AS url,
         COUNT(*)                                    AS visits,
-        COUNT(DISTINCT ip_address)                  AS unique_visitors
+        COUNT(DISTINCT ${this.uniqueVisitorExpr}) AS unique_visitors
       FROM preview_visits WHERE blog_id = ?${entityClause}${tf}
       GROUP BY referrer_host
       ORDER BY visits DESC
@@ -713,7 +734,7 @@ export class PreviewVisitService {
         `
       SELECT ${this.dailyVisitExpr} AS date,
              COUNT(*) AS visits,
-             COUNT(DISTINCT ip_address) AS unique_visitors
+             COUNT(DISTINCT ${this.uniqueVisitorExpr}) AS unique_visitors
       FROM preview_visits
       WHERE blog_id = ?${entityClause}${tf}
       GROUP BY ${this.dailyVisitExpr}
