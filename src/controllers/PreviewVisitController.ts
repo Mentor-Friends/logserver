@@ -1,6 +1,7 @@
 import { GetRelationRaw } from "mftsccs-node";
 import { PreviewVisitService } from "../services/analytics/preview-visit.service";
 import * as jwt from "jsonwebtoken";
+import { randomUUID } from "crypto";
 
 function parseReferrerHost(referrer?: string): string | undefined {
   if (!referrer) return undefined;
@@ -12,12 +13,18 @@ function parseReferrerHost(referrer?: string): string | undefined {
 }
 
 function getIp(req: any): string {
-  return (
-    req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+  const forwarded = req.headers["x-forwarded-for"];
+  const first = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+  const candidate =
+    first?.split(",")[0]?.trim() ||
     req.headers["x-real-ip"] ||
+    req.headers["cf-connecting-ip"] ||
+    req.headers["x-client-ip"] ||
+    req.headers["true-client-ip"] ||
     req.ip ||
-    "unknown"
-  );
+    "unknown";
+
+  return String(candidate || "unknown").trim();
 }
 
 function firstDefined(...values: any[]) {
@@ -46,6 +53,55 @@ function parseMaybeJsonObject(value: any): any {
   } catch {
     return value;
   }
+}
+
+function parseCookieHeader(cookieHeader?: string): Record<string, string> {
+  if (!cookieHeader) return {};
+
+  return cookieHeader.split(";").reduce((acc, part) => {
+    const [rawKey, ...rawValueParts] = part.split("=");
+    const key = rawKey?.trim();
+    if (!key) return acc;
+    const rawValue = rawValueParts.join("=").trim();
+    try {
+      acc[key] = decodeURIComponent(rawValue);
+    } catch {
+      acc[key] = rawValue;
+    }
+    return acc;
+  }, {} as Record<string, string>);
+}
+
+function getVisitorCookieOptions(req: any) {
+  const isSecure =
+    req.secure ||
+    req.protocol === "https" ||
+    req.headers?.["x-forwarded-proto"] === "https";
+
+  return {
+    sameSite: isSecure ? ("none" as const) : ("lax" as const),
+    secure: Boolean(isSecure),
+    path: "/",
+    httpOnly: false,
+  };
+}
+
+function getOrCreateVisitorId(
+  req: any,
+  res: any,
+  providedVisitorId?: string,
+): string {
+  const cookies = parseCookieHeader(req.headers?.cookie);
+  const existingVisitorId = firstDefined(cookies.visitor_id, req.cookies?.visitor_id);
+
+  if (existingVisitorId) {
+    return String(existingVisitorId).trim();
+  }
+
+  const visitorId =
+    String(providedVisitorId || "").trim() || randomUUID();
+  res.cookie("visitor_id", visitorId, getVisitorCookieOptions(req));
+  return visitorId;
 }
 
 function normalizeTrackingInput(req: any) {
@@ -133,6 +189,12 @@ function normalizeTrackingInput(req: any) {
       body.sessionId,
       query.session_id,
       query.sessionId,
+    ),
+    visitorId: firstDefined(
+      body.visitor_id,
+      body.visitorId,
+      query.visitor_id,
+      query.visitorId,
     ),
     entityId: firstDefined(
       body.entity_id,
@@ -248,6 +310,7 @@ export const trackPreviewVisit = async (req: any, res: any) => {
       blogId,
       redirectUrl,
       sessionId,
+      visitorId: providedVisitorId,
       entityId,
       ipAddress: providedIpAddress,
       country: providedCountry,
@@ -275,6 +338,7 @@ export const trackPreviewVisit = async (req: any, res: any) => {
     );
     const referrer_host = parseReferrerHost(referrer);
     const ip_address = String(providedIpAddress || getIp(req));
+    const visitor_id = getOrCreateVisitorId(req, res, providedVisitorId);
     const hasBrowserGeo = latitude !== undefined && longitude !== undefined;
 
     // Resolve which entity owns this blog (via the relation graph) and the
@@ -293,10 +357,23 @@ export const trackPreviewVisit = async (req: any, res: any) => {
       locationPromise,
     ]);
 
+    let resolvedLocationForStorage: VisitLocation = resolvedLocation;
+    if (
+      hasBrowserGeo &&
+      !resolvedLocationForStorage.country &&
+      !resolvedLocationForStorage.city
+    ) {
+      const ipFallback = await PreviewVisitService.resolveLocation(ip_address);
+      if (ipFallback.country || ipFallback.city) {
+        resolvedLocationForStorage = ipFallback;
+      }
+    }
+
     const location: VisitLocation = hasBrowserGeo
       ? {
-          country: providedCountry || resolvedLocation.country || "Unknown",
-          city: providedCity || resolvedLocation.city || "Unknown",
+          country:
+            providedCountry || resolvedLocationForStorage.country || "Unknown",
+          city: providedCity || resolvedLocationForStorage.city || "Unknown",
         }
       : resolvedLocation;
 
@@ -313,6 +390,7 @@ export const trackPreviewVisit = async (req: any, res: any) => {
       referrer,
       referrer_host,
       ip_address,
+      visitor_id,
       country: location.country,
       city: location.city,
       latitude,
