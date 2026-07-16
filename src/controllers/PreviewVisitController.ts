@@ -58,18 +58,21 @@ function parseMaybeJsonObject(value: any): any {
 function parseCookieHeader(cookieHeader?: string): Record<string, string> {
   if (!cookieHeader) return {};
 
-  return cookieHeader.split(";").reduce((acc, part) => {
-    const [rawKey, ...rawValueParts] = part.split("=");
-    const key = rawKey?.trim();
-    if (!key) return acc;
-    const rawValue = rawValueParts.join("=").trim();
-    try {
-      acc[key] = decodeURIComponent(rawValue);
-    } catch {
-      acc[key] = rawValue;
-    }
-    return acc;
-  }, {} as Record<string, string>);
+  return cookieHeader.split(";").reduce(
+    (acc, part) => {
+      const [rawKey, ...rawValueParts] = part.split("=");
+      const key = rawKey?.trim();
+      if (!key) return acc;
+      const rawValue = rawValueParts.join("=").trim();
+      try {
+        acc[key] = decodeURIComponent(rawValue);
+      } catch {
+        acc[key] = rawValue;
+      }
+      return acc;
+    },
+    {} as Record<string, string>,
+  );
 }
 
 function getVisitorCookieOptions(req: any) {
@@ -92,16 +95,30 @@ function getOrCreateVisitorId(
   providedVisitorId?: string,
 ): string {
   const cookies = parseCookieHeader(req.headers?.cookie);
-  const existingVisitorId = firstDefined(cookies.visitor_id, req.cookies?.visitor_id);
+  const existingVisitorId = firstDefined(
+    cookies.visitor_id,
+    req.cookies?.visitor_id,
+  );
 
   if (existingVisitorId) {
     return String(existingVisitorId).trim();
   }
 
-  const visitorId =
-    String(providedVisitorId || "").trim() || randomUUID();
+  const visitorId = String(providedVisitorId || "").trim() || randomUUID();
   res.cookie("visitor_id", visitorId, getVisitorCookieOptions(req));
   return visitorId;
+}
+
+function parseHttpUrl(value: unknown, baseUrl?: string): string | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = new URL(String(value), baseUrl);
+    return parsed.protocol === "http:" || parsed.protocol === "https:"
+      ? parsed.toString()
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function normalizeTrackingInput(req: any) {
@@ -117,22 +134,18 @@ function normalizeTrackingInput(req: any) {
     query.previewUrl,
   );
 
+  const host = req.get?.("host") || req.headers?.host;
+  const protocol = req.protocol || "https";
+  const baseUrl = host ? `${protocol}://${host}` : undefined;
+
   let parsedPreviewUrl: URL | null = null;
   if (previewUrlValue) {
     try {
-      parsedPreviewUrl = new URL(String(previewUrlValue));
+      parsedPreviewUrl = new URL(String(previewUrlValue), baseUrl);
     } catch {
       parsedPreviewUrl = null;
     }
   }
-
-  const blogId = firstDefined(
-    body.blog_id,
-    body.blogId,
-    query.blog_id,
-    query.blogId,
-    parsedPreviewUrl?.searchParams.get("blog_id"),
-  );
 
   const redirectUrl = firstDefined(
     body.redirect_url,
@@ -142,11 +155,17 @@ function normalizeTrackingInput(req: any) {
     parsedPreviewUrl?.searchParams.get("redirect_url"),
   );
 
-  const host = req.get?.("host") || req.headers?.host;
-  const protocol = req.protocol || "https";
+  const blogId = firstDefined(
+    body.blog_id,
+    body.blogId,
+    query.blog_id,
+    query.blogId,
+    parsedPreviewUrl?.searchParams.get("blog_id"),
+  );
+
   const trackingBaseUrl =
     process.env.LOGSERVER_BASE_URL ||
-    (host ? `${protocol}://${host}` : "https://logger.freeschema.com");
+    (baseUrl ?? "https://logger.freeschema.com");
   const previewUrl =
     firstDefined(
       body.preview_url,
@@ -195,6 +214,12 @@ function normalizeTrackingInput(req: any) {
       body.visitorId,
       query.visitor_id,
       query.visitorId,
+    ),
+    eventId: firstDefined(
+      body.event_id,
+      body.eventId,
+      query.event_id,
+      query.eventId,
     ),
     entityId: firstDefined(
       body.entity_id,
@@ -254,7 +279,7 @@ function parseQueryDate(
 
   const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(raw);
   const normalized = dateOnly
-    ? `${raw}T${bound === "start" ? "00:00:00.000" : "23:59:59.999"}`
+    ? `${raw}T${bound === "start" ? "00:00:00.000" : "23:59:59.999"}Z`
     : raw;
   const parsed = new Date(normalized).getTime();
 
@@ -311,6 +336,7 @@ export const trackPreviewVisit = async (req: any, res: any) => {
       redirectUrl,
       sessionId,
       visitorId: providedVisitorId,
+      eventId,
       entityId,
       ipAddress: providedIpAddress,
       country: providedCountry,
@@ -321,10 +347,14 @@ export const trackPreviewVisit = async (req: any, res: any) => {
       locationSource,
     } = normalizeTrackingInput(req);
 
-    if (!blogId || !redirectUrl) {
+    const host = req.get?.("host") || req.headers?.host;
+    const protocol = req.protocol || "https";
+    const baseUrl = host ? `${protocol}://${host}` : undefined;
+    const safeRedirectUrl = parseHttpUrl(redirectUrl, baseUrl);
+    const safePreviewUrl = parseHttpUrl(previewUrl, baseUrl);
+    if (!blogId || !safeRedirectUrl || !safePreviewUrl) {
       return res.status(400).json({
-        error:
-          "blog_id and redirect_url are required either directly or inside preview_url",
+        error: "blog_id, preview_url and a valid redirect_url are required",
       });
     }
 
@@ -338,7 +368,9 @@ export const trackPreviewVisit = async (req: any, res: any) => {
     );
     const referrer_host = parseReferrerHost(referrer);
     const ip_address = String(providedIpAddress || getIp(req));
-    const visitor_id = getOrCreateVisitorId(req, res, providedVisitorId);
+    const visitor_id = providedVisitorId
+      ? String(providedVisitorId).trim()
+      : undefined;
     const hasBrowserGeo = latitude !== undefined && longitude !== undefined;
 
     // Resolve which entity owns this blog (via the relation graph) and the
@@ -382,11 +414,16 @@ export const trackPreviewVisit = async (req: any, res: any) => {
       entityIdFromBlog ||
       (entityId ? String(entityId) : undefined);
 
-    PreviewVisitService.recordVisit({
+    if (!resolvedEntityId || resolvedEntityId === "NaN") {
+      return res.status(422).json({ error: "Unable to resolve article owner" });
+    }
+
+    const recorded = await PreviewVisitService.recordVisit({
+      event_id: eventId ? String(eventId) : undefined,
       blog_id: blogId,
       entity_id: resolvedEntityId,
-      redirect_url: redirectUrl,
-      preview_url: String(previewUrl),
+      redirect_url: safeRedirectUrl,
+      preview_url: safePreviewUrl,
       referrer,
       referrer_host,
       ip_address,
@@ -401,7 +438,10 @@ export const trackPreviewVisit = async (req: any, res: any) => {
       session_id: sessionId ? Number(sessionId) : undefined,
     });
 
-    res.status(200).json({ message: "Visit recorded" });
+    res.status(recorded ? 201 : 200).json({
+      message: recorded ? "Visit recorded" : "Visit already recorded",
+      duplicate: !recorded,
+    });
   } catch (err) {
     console.error("Error recording preview visit:", err);
     res.status(500).json({ error: "Failed to record visit" });
