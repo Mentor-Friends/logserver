@@ -5,8 +5,13 @@ import fs from "fs";
 export class PreviewVisitService {
   private static db: any = null;
 
-  private static dailyVisitExpr = `strftime('%Y-%m-%d', visited_at / 1000, 'unixepoch', 'localtime')`;
-  private static uniqueVisitorExpr = `COALESCE(NULLIF(visitor_id, ''), NULLIF(session_id, 999), ip_address, 'unknown')`;
+  private static dailyVisitExpr = `strftime('%Y-%m-%d', visited_at / 1000, 'unixepoch')`;
+  private static uniqueVisitorExpr = `CASE
+    WHEN NULLIF(visitor_id, '') IS NOT NULL THEN 'visitor:' || visitor_id
+    WHEN NULLIF(session_id, 999) IS NOT NULL THEN 'session:' || session_id
+    WHEN NULLIF(ip_address, '') IS NOT NULL AND ip_address <> 'unknown' THEN 'ip:' || ip_address
+    ELSE 'event:' || COALESCE(event_id, id)
+  END`;
   private static geoCache = new Map<
     string,
     { country?: string; city?: string }
@@ -25,6 +30,8 @@ export class PreviewVisitService {
 
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath);
+    this.db.pragma("journal_mode = WAL");
+    this.db.pragma("busy_timeout = 5000");
     this.ensureSchema();
     return this.db;
   }
@@ -33,6 +40,7 @@ export class PreviewVisitService {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS preview_visits (
         id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        event_id      TEXT,
         blog_id       TEXT NOT NULL,
         redirect_url  TEXT NOT NULL,
         preview_url   TEXT NOT NULL,
@@ -54,6 +62,14 @@ export class PreviewVisitService {
 
     // Keep older databases compatible after the entity_id filter was added.
     const columns = this.db.prepare(`PRAGMA table_info(preview_visits)`).all();
+    const hasEventId = columns.some(
+      (column: any) => column?.name === "event_id",
+    );
+    if (!hasEventId) {
+      this.db.exec(`
+        ALTER TABLE preview_visits ADD COLUMN event_id TEXT;
+      `);
+    }
     const hasVisitorId = columns.some(
       (column: any) => column?.name === "visitor_id",
     );
@@ -133,6 +149,8 @@ export class PreviewVisitService {
       CREATE INDEX IF NOT EXISTS idx_pv_country ON preview_visits(country);
       CREATE INDEX IF NOT EXISTS idx_pv_city ON preview_visits(city);
       CREATE INDEX IF NOT EXISTS idx_pv_visited_at ON preview_visits(visited_at);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_pv_event_id
+        ON preview_visits(event_id) WHERE event_id IS NOT NULL;
     `);
   }
   private static timeFilter(
@@ -196,14 +214,17 @@ export class PreviewVisitService {
     if (cached) return cached;
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 900);
+    const timeout = setTimeout(() => controller.abort(), 3000);
 
     try {
       const res = await fetch(
         `https://ipapi.co/${encodeURIComponent(ip)}/json/`,
         { signal: controller.signal },
       );
-      if (!res.ok) return {};
+      if (!res.ok) {
+        console.warn(`IP geolocation failed: ${res.status} for IP ${ip}`);
+        return {};
+      }
 
       const data: any = await res.json().catch(() => ({}));
       const location = {
@@ -213,7 +234,8 @@ export class PreviewVisitService {
       };
       this.geoCache.set(ip, location);
       return location;
-    } catch {
+    } catch (err) {
+      console.warn(`IP geolocation error for ${ip}:`, err);
       return {};
     } finally {
       clearTimeout(timeout);
@@ -233,7 +255,7 @@ export class PreviewVisitService {
     if (cached) return cached;
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 1200);
+    const timeout = setTimeout(() => controller.abort(), 3000);
 
     try {
       const url = new URL("https://nominatim.openstreetmap.org/reverse");
@@ -254,7 +276,10 @@ export class PreviewVisitService {
         },
       });
 
-      if (!res.ok) return {};
+      if (!res.ok) {
+        console.warn(`Nominatim reverse geocoding failed: ${res.status}`);
+        return {};
+      }
 
       const data: any = await res.json().catch(() => ({}));
       const address = data?.address || {};
@@ -266,13 +291,17 @@ export class PreviewVisitService {
             address.hamlet ||
             address.suburb ||
             address.county ||
+            address.state ||
+            address.region ||
+            address.province ||
             "",
         ).trim() || undefined;
       const country = String(address.country || "").trim() || undefined;
       const location = { country, city };
       this.reverseGeoCache.set(cacheKey, location);
       return location;
-    } catch {
+    } catch (err) {
+      console.warn(`Nominatim reverse geocoding error:`, err);
       return {};
     } finally {
       clearTimeout(timeout);
@@ -308,7 +337,8 @@ export class PreviewVisitService {
 
   // ─── record ─────────────────────────────────────────────────────────────────
 
-  public static async recordVisit(data: {
+  public static recordVisit(data: {
+    event_id?: string;
     blog_id: string;
     entity_id?: string;
     redirect_url: string;
@@ -324,39 +354,36 @@ export class PreviewVisitService {
     accuracy?: number;
     location_source?: string;
     session_id?: number;
-  }) {
-    return new Promise<void>((resolve, reject) => {
-      try {
-        const db = this.getDb();
-        db.prepare(
-          `
-        INSERT INTO preview_visits
-          (blog_id, entity_id, redirect_url, preview_url, referrer, referrer_host, ip_address, visitor_id, country, city, latitude, longitude, accuracy, location_source, session_id, visited_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  }): boolean {
+    const db = this.getDb();
+    const result = db
+      .prepare(
+        `
+        INSERT OR IGNORE INTO preview_visits
+          (event_id, blog_id, entity_id, redirect_url, preview_url, referrer, referrer_host, ip_address, visitor_id, country, city, latitude, longitude, accuracy, location_source, session_id, visited_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
-        ).run(
-          data.blog_id,
-          data.entity_id || null,
-          data.redirect_url,
-          data.preview_url,
-          data.referrer || null,
-          data.referrer_host || null,
-          data.ip_address || null,
-          data.visitor_id || null,
-          data.country || null,
-          data.city || null,
-          data.latitude ?? null,
-          data.longitude ?? null,
-          data.accuracy ?? null,
-          data.location_source || null,
-          data.session_id || null,
-          Date.now(),
-        );
-        resolve();
-      } catch (err) {
-        reject(err);
-      }
-    });
+      )
+      .run(
+        data.event_id,
+        data.blog_id,
+        data.entity_id || null,
+        data.redirect_url,
+        data.preview_url,
+        data.referrer || null,
+        data.referrer_host || null,
+        data.ip_address || null,
+        data.visitor_id || null,
+        data.country || null,
+        data.city || null,
+        data.latitude ?? null,
+        data.longitude ?? null,
+        data.accuracy ?? null,
+        data.location_source || null,
+        data.session_id || null,
+        Date.now(),
+      );
+    return result.changes === 1;
   }
   // ─── existing helpers (kept for backwards-compat) ───────────────────────────
 
@@ -397,11 +424,11 @@ export class PreviewVisitService {
   ) {
     const db = this.getDb();
     const params: any[] = [];
-    const tf = this.timeFilter(params, start, end);
     const entityClause = entity_id ? " AND entity_id = ?" : "";
     if (entity_id) {
       params.push(entity_id);
     }
+    const tf = this.timeFilter(params, start, end);
     params.push(limit);
     return db
       .prepare(
@@ -628,10 +655,16 @@ export class PreviewVisitService {
         )
         .all(aParams);
 
+      const aLocations = this.getLocationBreakdown(
+        aParams,
+        " AND blog_id = ?" + aEntityClause + atf,
+      );
+
       return {
         blog_id,
         ...aHead,
         daily_visits: aDailyVisits,
+        locations: aLocations,
         redirect_urls: aRedirects,
         referral_urls: aReferrals,
       };

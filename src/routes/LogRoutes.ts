@@ -20,6 +20,7 @@ import {
   getAllArticlesAnalytics,
 } from "../controllers/PreviewVisitController";
 import verifyRequestToken from "../middlewares/verifyRequestToken";
+import verifyArticleTrackingRequest from "../middlewares/verifyArticleTrackingRequest";
 
 const router = express.Router();
 
@@ -38,20 +39,31 @@ router.post("/analytics/routes-table", getRouteAnalyticsTable);
 // Preview-visit routes
 router.post(
   "/preview-visit/track",
-  express.text({ type: ["text/plain", "text/*"] }),
+  verifyArticleTrackingRequest,
   trackPreviewVisit,
 );
-router.get("/preview-visit/track", trackPreviewVisit);
 
 //comprehensive analytics across ALL articles
-router.get("/preview-visit/articles", verifyRequestToken, getAllArticlesAnalytics);
+router.get(
+  "/preview-visit/articles",
+  verifyRequestToken,
+  getAllArticlesAnalytics,
+);
 
 // Per-blog analytics (enhanced – now returns full breakdown)
 router.get("/preview-visit/by-blog", verifyRequestToken, getVisitsByBlog);
 
 // Existing helpers
-router.get("/preview-visit/top-redirects", verifyRequestToken, getTopRedirectUrls);
-router.get("/preview-visit/platforms", verifyRequestToken, getPlatformBreakdown);
+router.get(
+  "/preview-visit/top-redirects",
+  verifyRequestToken,
+  getTopRedirectUrls,
+);
+router.get(
+  "/preview-visit/platforms",
+  verifyRequestToken,
+  getPlatformBreakdown,
+);
 router.get("/preview-visit/visitor-ips", verifyRequestToken, getVisitorIps);
 
 export default router;
