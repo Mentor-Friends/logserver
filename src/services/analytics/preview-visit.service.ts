@@ -7,6 +7,7 @@ export class PreviewVisitService {
 
   private static dailyVisitExpr = `strftime('%Y-%m-%d', visited_at / 1000, 'unixepoch')`;
   private static uniqueVisitorExpr = `CASE
+    WHEN NULLIF(device_id, '') IS NOT NULL THEN 'device:' || device_id
     WHEN NULLIF(visitor_id, '') IS NOT NULL THEN 'visitor:' || visitor_id
     WHEN NULLIF(session_id, 999) IS NOT NULL THEN 'session:' || session_id
     WHEN NULLIF(ip_address, '') IS NOT NULL AND ip_address <> 'unknown' THEN 'ip:' || ip_address
@@ -48,6 +49,7 @@ export class PreviewVisitService {
         referrer_host TEXT,
         ip_address    TEXT,
         visitor_id    TEXT,
+        device_id     TEXT,
         country       TEXT,
         city          TEXT,
         latitude      REAL,
@@ -76,6 +78,15 @@ export class PreviewVisitService {
     if (!hasVisitorId) {
       this.db.exec(`
         ALTER TABLE preview_visits ADD COLUMN visitor_id TEXT;
+      `);
+    }
+
+    const hasDeviceId = columns.some(
+      (column: any) => column?.name === "device_id",
+    );
+    if (!hasDeviceId) {
+      this.db.exec(`
+        ALTER TABLE preview_visits ADD COLUMN device_id TEXT;
       `);
     }
 
@@ -140,10 +151,25 @@ export class PreviewVisitService {
       `);
     }
 
+    // Older server-to-server tracking requests sometimes stored the tracking
+    // domain as their referrer. The original referrer URL remains available in
+    // `referrer`, but the derived host must be unknown instead of appearing as
+    // a referral platform.
+    this.db
+      .prepare(
+        `
+        UPDATE preview_visits
+        SET referrer_host = NULL
+        WHERE lower(trim(referrer_host)) IN ('boomconsole.com', 'www.boomconsole.com')
+      `,
+      )
+      .run();
+
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_pv_blog_id ON preview_visits(blog_id);
       CREATE INDEX IF NOT EXISTS idx_pv_entity_id ON preview_visits(entity_id);
       CREATE INDEX IF NOT EXISTS idx_pv_visitor_id ON preview_visits(visitor_id);
+      CREATE INDEX IF NOT EXISTS idx_pv_device_id ON preview_visits(device_id);
       CREATE INDEX IF NOT EXISTS idx_pv_redirect_url ON preview_visits(redirect_url);
       CREATE INDEX IF NOT EXISTS idx_pv_referrer_host ON preview_visits(referrer_host);
       CREATE INDEX IF NOT EXISTS idx_pv_country ON preview_visits(country);
@@ -308,6 +334,29 @@ export class PreviewVisitService {
     }
   }
 
+  private static normalizeReferrerHost(
+    referrerHost?: string,
+    previewUrl?: string,
+  ): string | undefined {
+    const raw = String(referrerHost || "").trim();
+    if (!raw) return undefined;
+
+    const host = raw.replace(/^www\./i, "").toLowerCase();
+    const selfHosts = new Set<string>();
+    [previewUrl].filter(Boolean).forEach((value) => {
+      try {
+        const parsed = new URL(String(value));
+        const hostname = parsed.hostname.replace(/^www\./i, "").toLowerCase();
+        if (hostname) selfHosts.add(hostname);
+      } catch {
+        // ignore malformed URLs
+      }
+    });
+
+    if (selfHosts.has(host)) return undefined;
+    return raw;
+  }
+
   private static getLocationBreakdown(
     params: any[],
     whereExtra: string,
@@ -347,6 +396,7 @@ export class PreviewVisitService {
     referrer_host?: string;
     ip_address?: string;
     visitor_id?: string;
+    device_id?: string;
     country?: string;
     city?: string;
     latitude?: number;
@@ -356,12 +406,16 @@ export class PreviewVisitService {
     session_id?: number;
   }): boolean {
     const db = this.getDb();
+    const normalizedReferrerHost = this.normalizeReferrerHost(
+      data.referrer_host,
+      data.preview_url,
+    );
     const result = db
       .prepare(
         `
         INSERT OR IGNORE INTO preview_visits
-          (event_id, blog_id, entity_id, redirect_url, preview_url, referrer, referrer_host, ip_address, visitor_id, country, city, latitude, longitude, accuracy, location_source, session_id, visited_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (event_id, blog_id, entity_id, redirect_url, preview_url, referrer, referrer_host, ip_address, visitor_id, device_id, country, city, latitude, longitude, accuracy, location_source, session_id, visited_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       )
       .run(
@@ -371,9 +425,10 @@ export class PreviewVisitService {
         data.redirect_url,
         data.preview_url,
         data.referrer || null,
-        data.referrer_host || null,
+        normalizedReferrerHost || null,
         data.ip_address || null,
         data.visitor_id || null,
+        data.device_id || null,
         data.country || null,
         data.city || null,
         data.latitude ?? null,
