@@ -1,15 +1,44 @@
 import { GetRelationRaw } from "mftsccs-node";
 import { PreviewVisitService } from "../services/analytics/preview-visit.service";
 import * as jwt from "jsonwebtoken";
-import { randomUUID } from "crypto";
 
-function parseReferrerHost(referrer?: string): string | undefined {
+function parseReferrerHost(
+  referrer?: string,
+  context?: {
+    previewUrl?: string;
+    requestHost?: string;
+  },
+): string | undefined {
   if (!referrer) return undefined;
+
+  let parsed: URL | undefined;
   try {
-    return new URL(referrer).hostname.replace("www.", "");
+    parsed = new URL(referrer);
   } catch {
     return undefined;
   }
+
+  const host = parsed.hostname.replace(/^www\./i, "").toLowerCase();
+  if (!host) return undefined;
+
+  const selfHosts = new Set<string>();
+  [context?.previewUrl, context?.requestHost]
+    .filter(Boolean)
+    .forEach((value) => {
+      try {
+        const parsedValue = new URL(String(value), `https://${String(value)}`);
+        const hostname = parsedValue.hostname
+          .replace(/^www\./i, "")
+          .toLowerCase();
+        if (hostname) selfHosts.add(hostname);
+      } catch {
+        // Ignore malformed URLs and plain hostnames.
+      }
+    });
+
+  if (selfHosts.has(host)) return undefined;
+
+  return host;
 }
 
 function getIp(req: any): string {
@@ -53,60 +82,6 @@ function parseMaybeJsonObject(value: any): any {
   } catch {
     return value;
   }
-}
-
-function parseCookieHeader(cookieHeader?: string): Record<string, string> {
-  if (!cookieHeader) return {};
-
-  return cookieHeader.split(";").reduce(
-    (acc, part) => {
-      const [rawKey, ...rawValueParts] = part.split("=");
-      const key = rawKey?.trim();
-      if (!key) return acc;
-      const rawValue = rawValueParts.join("=").trim();
-      try {
-        acc[key] = decodeURIComponent(rawValue);
-      } catch {
-        acc[key] = rawValue;
-      }
-      return acc;
-    },
-    {} as Record<string, string>,
-  );
-}
-
-function getVisitorCookieOptions(req: any) {
-  const isSecure =
-    req.secure ||
-    req.protocol === "https" ||
-    req.headers?.["x-forwarded-proto"] === "https";
-
-  return {
-    sameSite: isSecure ? ("none" as const) : ("lax" as const),
-    secure: Boolean(isSecure),
-    path: "/",
-    httpOnly: false,
-  };
-}
-
-function getOrCreateVisitorId(
-  req: any,
-  res: any,
-  providedVisitorId?: string,
-): string {
-  const cookies = parseCookieHeader(req.headers?.cookie);
-  const existingVisitorId = firstDefined(
-    cookies.visitor_id,
-    req.cookies?.visitor_id,
-  );
-
-  if (existingVisitorId) {
-    return String(existingVisitorId).trim();
-  }
-
-  const visitorId = String(providedVisitorId || "").trim() || randomUUID();
-  res.cookie("visitor_id", visitorId, getVisitorCookieOptions(req));
-  return visitorId;
 }
 
 function parseHttpUrl(value: unknown, baseUrl?: string): string | undefined {
@@ -214,6 +189,12 @@ function normalizeTrackingInput(req: any) {
       body.visitorId,
       query.visitor_id,
       query.visitorId,
+    ),
+    deviceId: firstDefined(
+      body.device_id,
+      body.deviceId,
+      query.device_id,
+      query.deviceId,
     ),
     eventId: firstDefined(
       body.event_id,
@@ -336,6 +317,7 @@ export const trackPreviewVisit = async (req: any, res: any) => {
       redirectUrl,
       sessionId,
       visitorId: providedVisitorId,
+      deviceId,
       eventId,
       entityId,
       ipAddress: providedIpAddress,
@@ -366,11 +348,22 @@ export const trackPreviewVisit = async (req: any, res: any) => {
       req.headers["referer"],
       req.headers["referrer"],
     );
-    const referrer_host = parseReferrerHost(referrer);
+    const referrer_host = parseReferrerHost(referrer, {
+      previewUrl: safePreviewUrl,
+      requestHost: host,
+    });
     const ip_address = String(providedIpAddress || getIp(req));
     const visitor_id = providedVisitorId
       ? String(providedVisitorId).trim()
       : undefined;
+    const device_id = firstDefined(
+      deviceId,
+      req.body?.device_id,
+      req.body?.deviceId,
+      req.query?.device_id,
+      req.query?.deviceId,
+      req.cookies?.article_device_id,
+    );
     const hasBrowserGeo = latitude !== undefined && longitude !== undefined;
 
     // Resolve which entity owns this blog (via the relation graph) and the
@@ -428,6 +421,7 @@ export const trackPreviewVisit = async (req: any, res: any) => {
       referrer_host,
       ip_address,
       visitor_id,
+      device_id: device_id ? String(device_id).trim() : undefined,
       country: location.country,
       city: location.city,
       latitude,
