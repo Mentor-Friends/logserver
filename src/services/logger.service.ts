@@ -136,8 +136,11 @@ export class LogService {
         });
       }
     }
-    catch(ex){
-      console.error("The file does not exist till now");
+    catch(ex: any){
+      // A missing file is normal before the first write.
+      if (ex?.code !== "ENOENT") {
+        console.error(`Error rotating log file ${filePath}:`, ex);
+      }
     }
    
   }

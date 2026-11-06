@@ -365,16 +365,18 @@ export class PreviewVisitService {
     city: string;
     visits: number;
     unique_visitors: number;
+    session_ids: number[];
   }[] {
     const db = this.getDb();
-    return db
+    const rows = db
       .prepare(
         `
       SELECT
         COALESCE(country, 'Unknown') AS country,
         COALESCE(city, 'Unknown') AS city,
         COUNT(*) AS visits,
-        COUNT(DISTINCT ${this.uniqueVisitorExpr}) AS unique_visitors
+        COUNT(DISTINCT ${this.uniqueVisitorExpr}) AS unique_visitors,
+        GROUP_CONCAT(DISTINCT NULLIF(session_id, 999)) AS session_ids
       FROM preview_visits
       WHERE 1=1${whereExtra}
       GROUP BY country, city
@@ -382,6 +384,16 @@ export class PreviewVisitService {
     `,
       )
       .all(params);
+
+    return rows.map((row: any) => ({
+      ...row,
+      session_ids: row.session_ids
+        ? String(row.session_ids)
+            .split(",")
+            .map(Number)
+            .sort((a: number, b: number) => a - b)
+        : [],
+    }));
   }
 
   // ─── record ─────────────────────────────────────────────────────────────────

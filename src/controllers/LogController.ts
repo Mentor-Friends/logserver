@@ -108,9 +108,21 @@ function getRequestMetadata(req: any) {
   };
 }
 
+// Returns the user to read logs for, or null when the value is not a whole number.
+// The result is used in file paths, so nothing else may pass through.
+export function parseLogUserId(value: unknown): number | null {
+  if (value === undefined || value === "" || value === "null" || value === "undefined") {
+    return 998;
+  }
+  return typeof value === "string" && /^\d+$/.test(value) ? Number(value) : null;
+}
+
 export const getPackageLogs = (req: any, res: any) => {
   try {
-    const userId = req.query.userId || 998;
+    const userId = parseLogUserId(req.query.userId);
+    if (userId === null) {
+      return res.status(400).json({ message: "userId must be a whole number" });
+    }
     const query = req.query;
     let inpage = query.inpage ?? 10;
     let page = query.page ?? 1;
@@ -138,7 +150,10 @@ export const getApplicationLogs = (req: any, res: any) => {
     const query = req.query;
     let inpage = query.inpage ?? 10;
     let page = query.page ?? 1;
-    const userId = req.query.userId || 998;
+    const userId = parseLogUserId(req.query.userId);
+    if (userId === null) {
+      return res.status(400).json({ message: "userId must be a whole number" });
+    }
     let logLocationFolder = process.env.LOGPATH;
     let logType = "application";
     let userFolder = "user_" + userId;
